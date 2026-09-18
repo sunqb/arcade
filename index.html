@@ -1,0 +1,597 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="plume">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="当场玩：雷霆战机、湖边垂钓、鸵鸟外卖。单页小游戏目录，不用账号，点开即玩。" />
+  <title>当场玩 · 三款单页游戏</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Newsreader:ital,opsz,wght@1,16..72,500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="tokens.css" />
+  <style>
+/* Hallmark · genre: playful · macrostructure: Catalogue
+ * theme: Plume · accent: rose 18° · studied: no
+ * tone: playful · audience: casual players · use: click a game and play
+ * nav: N1 · footer: Ft5 · enrichment: none (typography + CSS art thumbs)
+ * F6 knobs: ratio=3/4 portrait, density=3-up, micro-action=开玩
+ * motion: card-lift · overlay-fade · blob-drift
+ * glass: nav · mast · cards · notes · footer · stage bar
+ * pre-emit critique: P4 H5 E4 S4 R4 V4 */
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { overflow-x: clip; }
+html { scroll-behavior: smooth; }
+
+body {
+  font-family: var(--font-body);
+  font-size: var(--text-md);
+  font-weight: 400;
+  color: var(--color-ink);
+  background: var(--color-paper);
+  line-height: var(--lh-relaxed);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+a { color: inherit; }
+
+.aura {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+.aura__blob {
+  position: absolute;
+  border-radius: 50%;
+  will-change: transform;
+}
+.aura__blob--a {
+  width: min(36rem, 58vw);
+  height: min(36rem, 58vw);
+  left: -14%;
+  top: -22%;
+  background: oklch(78% 0.10 18 / 0.34);
+  animation: blob-drift 28s var(--ease-in-out) infinite;
+}
+.aura__blob--b {
+  width: min(30rem, 48vw);
+  height: min(30rem, 48vw);
+  right: -10%;
+  top: 18%;
+  background: oklch(72% 0.08 230 / 0.30);
+  animation: blob-drift 34s var(--ease-in-out) infinite reverse;
+}
+.aura__blob--c {
+  width: min(40rem, 64vw);
+  height: min(40rem, 64vw);
+  left: 36%;
+  bottom: -32%;
+  background: oklch(82% 0.10 70 / 0.28);
+  animation: blob-drift 40s var(--ease-in-out) infinite;
+}
+@keyframes blob-drift {
+  0%, 100% { transform: translate(0, 0); }
+  50% { transform: translate(4%, -6%); }
+}
+
+.wrap {
+  width: min(100%, var(--page-max));
+  margin-inline: auto;
+  padding-inline: var(--page-gutter);
+  min-width: 0;
+  position: relative;
+  z-index: var(--z-base);
+}
+
+.glass {
+  background: var(--glass-fill);
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
+  border: 1px solid var(--glass-stroke);
+  box-shadow:
+    var(--glass-shadow),
+    inset 0 1px 0 var(--glass-stroke-inner);
+  isolation: isolate;
+}
+
+/* N1 wordmark + 2 links, sticky frosted pill */
+.nav-wrap {
+  position: sticky;
+  top: var(--space-sm);
+  z-index: var(--z-sticky-nav);
+  padding-block: var(--space-sm) 0;
+}
+.nav-min {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-lg);
+  padding: var(--space-sm) var(--space-lg);
+  border-radius: var(--radius-pill);
+}
+.wordmark {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: var(--text-lg);
+  letter-spacing: var(--tracking-tight);
+  text-decoration: none;
+  color: var(--color-ink);
+  white-space: nowrap;
+}
+.nav-min ul {
+  list-style: none;
+  display: flex;
+  gap: var(--space-md);
+  min-width: 0;
+}
+.nav-min a {
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--color-neutral);
+  text-decoration: none;
+  white-space: nowrap;
+  padding: var(--space-3xs) 0;
+  border-bottom: var(--rule-fine) solid transparent;
+  transition: color var(--dur-micro) var(--ease-out),
+              border-color var(--dur-micro) var(--ease-out);
+}
+.nav-min a:hover,
+.nav-min a.is-hover { color: var(--color-ink); border-bottom-color: var(--color-ink); }
+.nav-min a:focus-visible,
+.nav-min a.is-focus {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 3px;
+  border-radius: 2px;
+}
+.nav-min a:active,
+.nav-min a.is-active { transform: translateY(1px); }
+
+/* Catalogue mast — inventory header, not a display hero */
+.mast {
+  margin-top: var(--space-xl);
+  margin-bottom: var(--space-2xl);
+  padding: var(--space-xl) var(--space-lg);
+  max-width: 36rem;
+  min-width: 0;
+  border-radius: var(--radius-card);
+}
+.mast__count {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  color: var(--color-muted);
+  margin-bottom: var(--space-sm);
+}
+.mast h1 {
+  font-family: var(--font-display);
+  font-size: var(--text-2xl);
+  font-weight: 700;
+  letter-spacing: var(--tracking-tight);
+  line-height: var(--lh-snug);
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+.mast p {
+  margin-top: var(--space-sm);
+  color: var(--color-neutral);
+  max-width: var(--measure);
+}
+
+/* F6 product card grid */
+.shelf {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-xl) var(--space-lg);
+  padding-bottom: var(--space-3xl);
+  padding-top: var(--space-md);
+}
+@media (min-width: 40rem) {
+  .shelf { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (min-width: 60rem) {
+  .shelf { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+
+.game {
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  gap: var(--space-sm);
+  text-decoration: none;
+  color: var(--color-ink);
+  min-width: 0;
+  border-radius: var(--radius-card);
+  outline: none;
+  padding: var(--space-sm);
+  transition: transform var(--dur-short) var(--ease-out),
+              background var(--dur-short) var(--ease-out);
+}
+.game__media {
+  position: relative;
+  display: block;
+  aspect-ratio: 3 / 4;
+  border-radius: calc(var(--radius-card) - 4px);
+  overflow: hidden;
+  background: var(--color-paper-2);
+  min-width: 0;
+}
+.game__art {
+  width: 100%;
+  height: 100%;
+  display: block;
+  position: relative;
+}
+.game__meta h2 {
+  font-family: var(--font-display);
+  font-size: var(--text-md);
+  font-weight: 600;
+  letter-spacing: var(--tracking-tight);
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+.game__meta p {
+  font-size: var(--text-sm);
+  color: var(--color-neutral);
+  margin-top: var(--space-2xs);
+}
+.game__play {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--color-accent);
+  justify-self: start;
+  transition: transform var(--dur-micro) var(--ease-out),
+              color var(--dur-micro) var(--ease-out);
+}
+.game:hover .game__play,
+.game.is-hover .game__play,
+.game:focus-visible .game__play { transform: translateX(4px); }
+
+@media (hover: hover) and (pointer: fine) {
+  .game:hover,
+  .game.is-hover {
+    transform: translateY(-2px);
+    background: var(--glass-fill-strong);
+  }
+}
+.game:focus-visible,
+.game.is-focus {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 3px;
+}
+.game:active,
+.game.is-active { transform: translateY(0); }
+.game[aria-disabled="true"] { pointer-events: none; opacity: 0.45; }
+.game[data-state="loading"] .game__play::after { content: " …"; }
+.game[data-state="error"] .game__play { color: var(--color-ink); }
+.game[data-state="success"] .game__play { color: var(--color-ink-2); }
+
+/* CSS art — fighter */
+.art--fighter { background: var(--art-fighter-sky); }
+.art--fighter::before {
+  content: "";
+  position: absolute;
+  inset: 18% 42% auto 42%;
+  height: 22%;
+  background: var(--art-fighter-ship);
+  clip-path: polygon(50% 0, 100% 100%, 0 100%);
+}
+.art--fighter::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 8%;
+  width: 3px;
+  height: 14%;
+  transform: translateX(-50%);
+  background: var(--art-fighter-shot);
+  box-shadow:
+    18px 28px 0 0 var(--art-fighter-shot),
+    -16px 40px 0 0 var(--art-fighter-shot),
+    0 120px 0 40px var(--art-fighter-mid);
+}
+
+/* CSS art — fishing */
+.art--fish { background: var(--art-fish-sky); }
+.art--fish::before {
+  content: "";
+  position: absolute;
+  inset: 58% 0 0;
+  background: var(--art-fish-water);
+}
+.art--fish::after {
+  content: "";
+  position: absolute;
+  left: 12%;
+  bottom: 42%;
+  width: 28%;
+  height: 8%;
+  background: var(--art-fish-dock);
+  box-shadow:
+    42px -86px 0 -18px var(--art-fish-bobber),
+    54px -40px 0 -22px var(--color-ink);
+}
+
+/* CSS art — ostrich */
+.art--ostrich { background: var(--art-ostrich-sky); }
+.art--ostrich::before {
+  content: "";
+  position: absolute;
+  right: 14%;
+  top: 16%;
+  width: 28%;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: var(--art-ostrich-sun);
+}
+.art--ostrich::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 28%;
+  background: var(--art-ostrich-road);
+  box-shadow: 38% -18% 0 0 var(--art-ostrich-body);
+}
+
+.note {
+  padding: var(--space-xl) var(--space-lg);
+  max-width: 42rem;
+  min-width: 0;
+  margin-bottom: var(--space-2xl);
+  border-radius: var(--radius-card);
+}
+.note h2 {
+  font-family: var(--font-display);
+  font-size: var(--text-lg);
+  font-weight: 600;
+  margin-bottom: var(--space-sm);
+  overflow-wrap: anywhere;
+}
+.note p { color: var(--color-neutral); }
+.note + .note { padding-top: 0; }
+
+.foot-stmt {
+  position: relative;
+  z-index: var(--z-base);
+  margin: 0 var(--page-gutter) var(--space-xl);
+  padding: var(--space-xl) var(--space-lg);
+  display: grid;
+  gap: var(--space-lg);
+  border-radius: var(--radius-card);
+}
+.foot-stmt__line {
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-size: clamp(1.75rem, 5vw, 3.25rem);
+  font-weight: 500;
+  line-height: 1.05;
+  letter-spacing: -0.02em;
+  max-width: 14ch;
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+.foot-stmt__meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--space-md);
+  flex-wrap: wrap;
+  padding-block-start: var(--space-sm);
+  border-top: var(--rule-hair) solid var(--color-rule);
+  font-size: var(--text-sm);
+  color: var(--color-muted);
+}
+.foot-stmt__meta .wordmark { font-size: var(--text-base); }
+
+/* In-page player */
+.stage {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal);
+  background: var(--color-ink);
+  display: none;
+  flex-direction: column;
+}
+.stage.is-open { display: flex; }
+.stage__bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-md);
+  min-height: var(--banner-height);
+  padding: var(--space-xs) var(--page-gutter);
+  background: var(--glass-fill-strong);
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
+  border-bottom: 1px solid var(--glass-stroke);
+  box-shadow: inset 0 1px 0 var(--glass-stroke-inner);
+}
+.stage__title {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.stage__back,
+.stage iframe {
+  border: 0;
+}
+.stage iframe {
+  flex: 1;
+  width: 100%;
+  background: var(--color-ink);
+}
+.stage__back {
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--color-paper);
+  background: var(--color-ink);
+  padding: 0.4rem 0.95rem;
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: transform var(--dur-micro) var(--ease-out),
+              background var(--dur-micro) var(--ease-out);
+}
+.stage__back:hover,
+.stage__back.is-hover { background: var(--color-ink-2); transform: translateY(-1px); }
+.stage__back:focus-visible,
+.stage__back.is-focus { outline: 2px solid var(--color-focus); outline-offset: 3px; }
+.stage__back:active,
+.stage__back.is-active { transform: translateY(1px); }
+.stage__back:disabled,
+.stage__back.is-disabled { opacity: 0.4; cursor: not-allowed; }
+.stage__back[data-state="loading"] { opacity: 0.7; }
+.stage__back[data-state="error"] { background: var(--color-neutral); }
+.stage__back[data-state="success"] { background: var(--color-ink); }
+
+body.is-playing { overflow: hidden; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation: none !important;
+    transition: opacity 150ms linear !important;
+    scroll-behavior: auto !important;
+  }
+  .game:hover,
+  .game:hover .game__play { transform: none; }
+}
+
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .glass,
+  .stage__bar {
+    background: var(--color-paper-2);
+  }
+}
+  </style>
+</head>
+<body>
+  <div class="aura" aria-hidden="true">
+    <span class="aura__blob aura__blob--a"></span>
+    <span class="aura__blob aura__blob--b"></span>
+    <span class="aura__blob aura__blob--c"></span>
+  </div>
+
+  <div class="nav-wrap wrap">
+    <nav class="nav-min glass" aria-label="主导航">
+      <a class="wordmark" href="#top">当场玩</a>
+      <ul>
+        <li><a href="#games">目录</a></li>
+        <li><a href="#about">说明</a></li>
+      </ul>
+    </nav>
+  </div>
+
+  <main id="top">
+    <div class="wrap">
+      <header class="mast glass">
+        <p class="mast__count">三款在架 · 2026</p>
+        <h1>单页小游戏，点开就进。</h1>
+        <p>没有账号，没有大厅排队。雷霆战机、湖边垂钓、鸵鸟外卖都是独立网页，浏览器打开就能玩。</p>
+      </header>
+    </div>
+
+    <section class="shelf wrap" id="games" aria-label="游戏目录">
+      <a class="game glass" href="thunder-fighter.html" data-play data-title="雷霆战机">
+        <div class="game__media" aria-hidden="true">
+          <span class="game__art art--fighter"></span>
+        </div>
+        <div class="game__meta">
+          <h2>雷霆战机</h2>
+          <p>弹幕射击。拖拽或 WASD 移动，自动开火，空格放炸弹。</p>
+        </div>
+        <span class="game__play">开玩 →</span>
+      </a>
+
+      <a class="game glass" href="fishing-demo.html" data-play data-title="湖边垂钓">
+        <div class="game__media" aria-hidden="true">
+          <span class="game__art art--fish"></span>
+        </div>
+        <div class="game__meta">
+          <h2>湖边垂钓</h2>
+          <p>按住蓄力、松开抛竿。咬钩后按住收线，把张力留在绿区。</p>
+        </div>
+        <span class="game__play">开玩 →</span>
+      </a>
+
+      <a class="game glass" href="ostrich-delivery.html" data-play data-title="鸵鸟外卖">
+        <div class="game__media" aria-hidden="true">
+          <span class="game__art art--ostrich"></span>
+        </div>
+        <div class="game__meta">
+          <h2>鸵鸟外卖</h2>
+          <p>黄昏公路配送动画。鸵鸟骑车送餐，路面颠簸会带起跳。</p>
+        </div>
+        <span class="game__play">开玩 →</span>
+      </a>
+    </section>
+
+    <section class="note wrap glass" id="about">
+      <h2>怎么用</h2>
+      <p>点卡片会在本页打开游戏，左上角返回大厅。没有脚本时卡片就是普通链接，会跳进对应网页。三款都是单文件，不记进度，关掉即止。</p>
+    </section>
+  </main>
+
+  <footer class="foot-stmt glass">
+    <p class="foot-stmt__line">打开就能玩，关了就走。</p>
+    <div class="foot-stmt__meta">
+      <span class="wordmark">当场玩</span>
+      <span>三款单页 · 不用登录</span>
+    </div>
+  </footer>
+
+  <div class="stage" id="stage" hidden>
+    <div class="stage__bar">
+      <button type="button" class="stage__back" id="stageBack">返回大厅</button>
+      <p class="stage__title" id="stageTitle">游戏</p>
+    </div>
+    <iframe id="stageFrame" title="游戏画面" allow="fullscreen"></iframe>
+  </div>
+
+  <script>
+  (function () {
+    var stage = document.getElementById('stage');
+    var frame = document.getElementById('stageFrame');
+    var title = document.getElementById('stageTitle');
+    var back = document.getElementById('stageBack');
+    var links = document.querySelectorAll('[data-play]');
+
+    function openPlay(href, name) {
+      title.textContent = name;
+      frame.src = href;
+      stage.hidden = false;
+      stage.classList.add('is-open');
+      document.body.classList.add('is-playing');
+      back.focus();
+    }
+
+    function closePlay() {
+      stage.classList.remove('is-open');
+      stage.hidden = true;
+      document.body.classList.remove('is-playing');
+      frame.src = 'about:blank';
+    }
+
+    links.forEach(function (link) {
+      link.addEventListener('click', function (event) {
+        if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+        event.preventDefault();
+        openPlay(link.getAttribute('href'), link.getAttribute('data-title') || '游戏');
+      });
+    });
+
+    back.addEventListener('click', closePlay);
+    document.addEventListener('keydown', function (event) {
+      if (event.key === 'Escape' && stage.classList.contains('is-open')) closePlay();
+    });
+  })();
+  </script>
+</body>
+</html>
