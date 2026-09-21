@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta name="description" content="当场玩：雷霆战机、湖边垂钓、鸵鸟外卖。单页小游戏目录，不用账号，点开即玩。" />
-  <title>当场玩 · 三款单页游戏</title>
+  <meta name="description" content="当场玩：吞噬进化、雷霆战机、湖边垂钓、鸵鸟外卖。单页小游戏目录，不用账号，点开即玩。" />
+  <title>当场玩 · 四款单页游戏</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Newsreader:ital,opsz,wght@1,16..72,500&display=swap" rel="stylesheet" />
@@ -337,6 +337,29 @@ a { color: inherit; }
   box-shadow: 38% -18% 0 0 var(--art-ostrich-body);
 }
 
+/* CSS art — devour */
+.art--devour { background: linear-gradient(var(--art-devour-sky), var(--art-devour-sea) 62%); }
+.art--devour::before {
+  content: "";
+  position: absolute;
+  right: 14%;
+  top: 8%;
+  width: 24%;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: var(--art-devour-sun);
+}
+.art--devour::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(circle 4px at 21% 76%, var(--art-devour-fish-1) 99%, transparent),
+    radial-gradient(circle 8px at 39% 67%, var(--art-devour-fish-2) 99%, transparent),
+    radial-gradient(circle 14px at 57% 57%, var(--art-devour-fish-2) 99%, transparent),
+    radial-gradient(circle 23px at 75% 44%, var(--art-devour-fish-3) 99%, transparent);
+}
+
 .note {
   padding: var(--space-xl) var(--space-lg);
   max-width: 42rem;
@@ -492,9 +515,9 @@ body.is-playing { overflow: hidden; }
   <main id="top">
     <div class="wrap">
       <header class="mast glass">
-        <p class="mast__count">三款在架 · 2026</p>
+        <p class="mast__count">四款在架 · 2026</p>
         <h1>单页小游戏，点开就进。</h1>
-        <p>没有账号，没有大厅排队。雷霆战机、湖边垂钓、鸵鸟外卖都是独立网页，浏览器打开就能玩。</p>
+        <p>没有账号，没有大厅排队。吞噬进化、雷霆战机、湖边垂钓、鸵鸟外卖都是独立网页，浏览器打开就能玩。</p>
       </header>
     </div>
 
@@ -531,11 +554,22 @@ body.is-playing { overflow: hidden; }
         </div>
         <span class="game__play">开玩 →</span>
       </a>
+
+      <a class="game glass" href="devour-evolution.html" data-play data-title="吞噬进化">
+        <div class="game__media" aria-hidden="true">
+          <span class="game__art art--devour"></span>
+        </div>
+        <div class="game__meta">
+          <h2>吞噬进化</h2>
+          <p>大鱼吃小鱼进化论：微生物、海豹企鹅、飞机路障、更大的鲨鱼，最后吞掉整个太阳系。</p>
+        </div>
+        <span class="game__play">开玩 →</span>
+      </a>
     </section>
 
     <section class="note wrap glass" id="about">
       <h2>怎么用</h2>
-      <p>点卡片会在本页打开游戏，左上角返回大厅。没有脚本时卡片就是普通链接，会跳进对应网页。三款都是单文件，不记进度，关掉即止。</p>
+      <p>点卡片会在本页打开游戏，左上角返回大厅。没有脚本时卡片就是普通链接，会跳进对应网页。四款都是单文件，不记进度，关掉即止。</p>
     </section>
   </main>
 
@@ -543,7 +577,7 @@ body.is-playing { overflow: hidden; }
     <p class="foot-stmt__line">打开就能玩，关了就走。</p>
     <div class="foot-stmt__meta">
       <span class="wordmark">当场玩</span>
-      <span>三款单页 · 不用登录</span>
+      <span>四款单页 · 不用登录</span>
     </div>
   </footer>
 

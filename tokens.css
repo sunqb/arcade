@@ -29,6 +29,13 @@
   --art-ostrich-road: oklch(22% 0.03 240);
   --art-ostrich-body: oklch(88% 0.04 85);
 
+  --art-devour-sky: oklch(82% 0.05 230);
+  --art-devour-sea: oklch(36% 0.08 240);
+  --art-devour-sun: oklch(83% 0.13 75);
+  --art-devour-fish-1: oklch(86% 0.07 160);
+  --art-devour-fish-2: oklch(90% 0.06 90);
+  --art-devour-fish-3: oklch(78% 0.12 18);
+
   --font-display: "Geist", ui-sans-serif, system-ui, sans-serif;
   --font-body: "Geist", ui-sans-serif, system-ui, sans-serif;
   --font-serif: "Newsreader", ui-serif, Georgia, serif;

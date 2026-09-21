@@ -1,0 +1,1225 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="theme-color" content="#07263f">
+<title>吞噬进化 · Devour Evolution</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    width: 100%; height: 100%; overflow: hidden;
+    background: #07263f;
+    -webkit-tap-highlight-color: transparent;
+    -webkit-user-select: none; user-select: none;
+    touch-action: none; overscroll-behavior: none;
+  }
+  #game { display: block; width: 100vw; height: 100vh; cursor: crosshair; }
+  @media (pointer: coarse) { #game { cursor: none; } }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<script>
+/* ==========================================================================
+   吞噬进化 · Devour Evolution
+   单文件 Canvas 成长吞噬游戏 — 无外部依赖、无持久化存储
+   从微生物一路吃到大鱼、海豹企鹅、沉城汽车路障、更大的鲨鱼、天上的飞机，
+   最后冲出海洋，吞掉月球、行星、地球和整个太阳系。
+   ========================================================================== */
+(function () {
+'use strict';
+
+/* ------------------------------ 常量与工具 ------------------------------ */
+const TAU = Math.PI * 2;
+const STEP = 1 / 60;
+
+const rand  = (a, b) => a + Math.random() * (b - a);
+const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
+const lerp  = (a, b, t) => a + (b - a) * t;
+const dist2 = (ax, ay, bx, by) => { const dx = ax - bx, dy = ay - by; return dx * dx + dy * dy; };
+const hash  = i => { const x = Math.sin(i * 127.1 + 311.7) * 43758.5453; return x - Math.floor(x); };
+
+/* 世界坐标：y 向下增大。太空在顶端，海水在中段，海底沉城在底部。 */
+const WORLD_W  = 24000;
+const WORLD_TOP  = -4200;   // 太空上界
+const SPACE_Y    = 2600;    // 太空 / 天空分界
+const SURFACE    = 7200;    // 海平面
+const FLOOR      = 13600;   // 海底
+const CITY = { x0: 500, x1: 6600, y0: 12880, y1: 13480 };   // 海底沉城
+const SUN_SIZE   = 1500;    // 太阳半径（吞下即通关）
+const SUN_POS    = { x: WORLD_W / 2, y: -2000 };
+const GRAVITY    = 150;
+
+/* ------------------------------ 进化阶段 ------------------------------ */
+const STAGES = [
+  { size: 0,   e: '🐟', name: '浮游幼鱼', unlock: '微生物 🦠' },
+  { size: 30,  e: '🐠', name: '小鱼',     unlock: '鱼群 🐟' },
+  { size: 55,  e: '🐬', name: '猎手',     unlock: '中鱼 🐠 · 乌贼 🦑 · 海龟 🐢' },
+  { size: 95,  e: '🐋', name: '巨兽',     unlock: '企鹅 🐧 · 海豹 🦭 · 快艇 🚤 · 沉城车群 🚗🚧' },
+  { size: 160, e: '🦈', name: '鲨鱼猎人', unlock: '鲨鱼 🦈 · 轮船 🚢 · 直升机 🚁 · 飞机 ✈️' },
+  { size: 280, e: '🛸', name: '宇宙鱼',   unlock: '人造卫星 🛰️ · 已能自由飞出海洋' },
+  { size: 480, e: '🕳️', name: '吞噬者',   unlock: '月球 🌕 · 行星 🪐 · 地球 🌍' }
+];
+
+/* ------------------------------ 物种表 ------------------------------ */
+/* s: 体型半径区间 · n: 营养(转化为质量) · v: 游速 · z: 栖息层 · pop: 随玩家体型的目标数量 */
+const ZONE = {
+  water:   () => [SURFACE + 120, FLOOR - 160],
+  mid:     () => [SURFACE + 500, SURFACE + 4200],
+  deep:    () => [SURFACE + 2800, FLOOR - 260],
+  abyss:   () => [SURFACE + 4200, FLOOR - 500],
+  surface: () => [SURFACE + 100, SURFACE + 1100],
+  float:   () => [SURFACE - 40, SURFACE + 40],
+  skyLow:  () => [SURFACE - 460, SURFACE - 90],
+  skyHigh: () => [SURFACE - 3200, SURFACE - 800],
+  space:   () => [1200, 2450],
+  city:    () => [CITY.y0, CITY.y1]
+};
+
+const SPECIES = {
+  microbe:  { e: '🦠', s: [3, 6],       n: 0.12, v: 7,   score: 1,    z: 'water',   pop: s => s < 40 ? 34 : s < 110 ? 16 : 8 },
+  smallfish:{ e: '🐟', s: [8, 14],      n: 0.7,  v: 55,  score: 3,    z: 'mid',   flee: 1, pop: s => s < 80 ? 20 : 10 },
+  medfish:  { e: '🐠', s: [18, 30],     n: 2.6,  v: 72,  score: 8,    z: 'mid',   flee: 1, pop: s => s < 38 ? 0 : 12 },
+  squid:    { e: '🦑', s: [22, 34],     n: 3.4,  v: 46,  score: 10,   z: 'deep',  flee: 1, pop: s => s < 48 ? 0 : 4 },
+  turtle:   { e: '🐢', s: [26, 40],     n: 4.5,  v: 30,  score: 12,   z: 'surface', flee: 1, pop: s => s < 58 ? 0 : 3 },
+  penguin:  { e: '🐧', s: [30, 44],     n: 9,    v: 95,  score: 20,   z: 'surface', flee: 1, pop: s => s < 72 ? 0 : 4 },
+  seal:     { e: '🦭', s: [38, 56],     n: 14,   v: 70,  score: 30,   z: 'surface', flee: 1, pop: s => s < 86 ? 0 : 4 },
+  car:      { e: '🚗', s: [26, 40],     n: 9,    v: 26,  score: 18,   z: 'city',  patrol: 1, pop: s => s < 86 ? 0 : 5 },
+  bus:      { e: '🚌', s: [40, 55],     n: 15,   v: 18,  score: 30,   z: 'city',  patrol: 1, pop: s => s < 100 ? 0 : 3 },
+  block:    { e: '🚧', s: [22, 36],     n: 8,    v: 0,   score: 15,   z: 'city',  still: 1, pop: s => s < 86 ? 0 : 6 },
+  boat:     { e: '🚤', s: [46, 72],     n: 24,   v: 85,  score: 45,   z: 'float', flee: 1, pop: s => s < 95 ? 0 : 3 },
+  ship:     { e: '🚢', s: [95, 150],    n: 45,   v: 30,  score: 90,   z: 'float', pop: s => s < 150 ? 0 : 2 },
+  heli:     { e: '🚁', s: [40, 64],     n: 30,   v: 115, score: 60,   z: 'skyLow', cruise: 1, pop: s => s < 100 ? 0 : 3 },
+  plane:    { e: '✈️', s: [60, 100],    n: 40,   v: 175, score: 80,   z: 'skyHigh', cruise: 1, pop: s => s < 150 ? 0 : 4 },
+  shark:    { e: '🦈', s: [40, 900],    n: 65,   v: 130, score: 150,  z: 'deep',  hunt: 1, pop: s => s < 45 ? 0 : 3 },
+  whale:    { e: '🐋', s: [160, 260],   n: 130,  v: 36,  score: 250,  z: 'abyss', pop: s => s < 230 ? 0 : 2 },
+  sat:      { e: '🛰️', s: [90, 150],    n: 380,  v: 45,  score: 400,  z: 'space', cruise: 1, pop: s => s < 300 ? 0 : 4 },
+  moon:     { e: '🌕', s: [380, 420],   n: 950,  v: 8,   score: 1500, z: 'space', celestial: 1, pop: s => s < 700 ? 0 : 2 },
+  planet:   { e: '🪐', s: [640, 880],   n: 1900, v: 8,   score: 3000, z: 'space', celestial: 1, pop: s => s < 1000 ? 0 : 2 },
+  earth:    { e: '🌍', s: [1100, 1100], n: 6000, v: 0,   score: 10000, z: 'space', celestial: 1, pop: () => 0 },
+  sun:      { e: '☀️', s: [1500, 1500], n: 99999, v: 0,  score: 50000, z: 'space', celestial: 1, pop: () => 0 }
+};
+
+/* 面朝左的 emoji（移动向右时水平翻转） */
+const FACE_LEFT = new Set(['🐟', '🐠', '🐡', '🐬', '🐋', '🦈', '🦭', '🐢', '🦑', '🚗', '🚌', '🚤', '🚢', '🐧', '🦠']);
+
+/* ------------------------------ 画布与视口 ------------------------------ */
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d', { alpha: false });
+const view = { w: 0, h: 0, dpr: 1 };
+
+function resize() {
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  view.dpr = dpr;
+  view.w = window.innerWidth;
+  view.h = window.innerHeight;
+  canvas.width = Math.max(1, Math.floor(view.w * dpr));
+  canvas.height = Math.max(1, Math.floor(view.h * dpr));
+  canvas.style.width = view.w + 'px';
+  canvas.style.height = view.h + 'px';
+}
+
+/* ------------------------------ emoji 精灵缓存 ------------------------------ */
+const emojiCache = new Map();
+function emojiSprite(ch, px) {
+  px = Math.max(8, Math.ceil(px / 4) * 4);
+  const key = ch + '@' + px;
+  let sp = emojiCache.get(key);
+  if (sp) return sp;
+  const pad = Math.ceil(px * 0.35);
+  const sz = px + pad * 2;
+  const c = document.createElement('canvas');
+  c.width = c.height = sz;
+  const g = c.getContext('2d');
+  g.font = px + 'px "Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji",sans-serif';
+  g.textAlign = 'center';
+  g.textBaseline = 'middle';
+  g.fillText(ch, sz / 2, sz / 2 + px * 0.04);
+  sp = { c, half: sz / 2 };
+  emojiCache.set(key, sp);
+  if (emojiCache.size > 220) emojiCache.clear();
+  return sp;
+}
+function drawEmoji(ch, x, y, size, flip) {
+  const px = size * 2.15;
+  if (px < 6 || px > 4200) return;
+  const sp = emojiSprite(ch, px);
+  ctx.save();
+  ctx.translate(x, y);
+  // flip 表示正在向左移动；鱼类 emoji 原生朝左，向右游时才镜像
+  if (FACE_LEFT.has(ch) ? !flip : flip) ctx.scale(-1, 1);
+  ctx.drawImage(sp.c, -sp.half, -sp.half);
+  ctx.restore();
+}
+
+/* ------------------------------ 全局状态 ------------------------------ */
+const game = {
+  state: 'title',        // title | play | pause | over | win
+  t: 0, playT: 0, endT: 0,
+  score: 0, eaten: 0, maxSize: 16,
+  flash: 0, hintT: 14, popCd: 0.5, stateT: 0
+};
+const player = {
+  x: WORLD_W / 2, y: 8600, vx: 0, vy: 0,
+  mass: 1, size: 16, dispSize: 16,
+  hearts: 3, invuln: 0, dashT: 0, dashCd: 0,
+  dir: 1, stage: 0, trail: 0
+};
+const cam = { x: player.x, y: player.y, z: 1, zt: 1, shake: 0 };
+
+let entities = [];   // 猎物 / 天体
+const parts = [];    // 粒子
+const texts = [];    // 飘分
+const chomps = [];   // 吞咽动画
+const banners = [];  // 阶段横幅
+let stars = [], clouds = [], kelps = [];
+
+function refreshSize() {
+  player.size = 16 * Math.sqrt(Math.max(player.mass, 1));
+  player.dispSize = Math.max(player.dispSize, player.size * 0.6);
+  game.maxSize = Math.max(game.maxSize, player.size);
+  let st = 0;
+  for (let i = 0; i < STAGES.length; i++) if (player.size >= STAGES[i].size) st = i;
+  if (st > player.stage) {
+    player.stage = st;
+    player.hearts = 3;
+    banners.push({ txt: '进化 · ' + STAGES[st].name, sub: '现在可以吃：' + STAGES[st].unlock, t: 0, life: 3 });
+    sfxStage();
+    ring(player.x, player.y, player.size * 3, 'rgba(255,255,255,0.9)');
+  }
+}
+function stageOf(s) {
+  let st = 0;
+  for (let i = 0; i < STAGES.length; i++) if (s >= STAGES[i].size) st = i;
+  return st;
+}
+function maxSpeed() { return 90 + player.size * 2.2; }
+
+/* ------------------------------ 音效（WebAudio 合成） ------------------------------ */
+let AC = null, master = null, muted = false, noiseBuf = null;
+function ensureAudio() {
+  if (AC) { if (AC.state === 'suspended') AC.resume(); return; }
+  const Ctx = window.AudioContext || window.webkitAudioContext;
+  if (!Ctx) return;
+  AC = new Ctx();
+  master = AC.createGain();
+  master.gain.value = 0.5;
+  master.connect(AC.destination);
+  noiseBuf = AC.createBuffer(1, AC.sampleRate * 0.5, AC.sampleRate);
+  const d = noiseBuf.getChannelData(0);
+  for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+}
+function tone(f0, f1, dur, type, vol, delay) {
+  if (!AC || muted) return;
+  const t0 = AC.currentTime + (delay || 0);
+  const o = AC.createOscillator(), g = AC.createGain();
+  o.type = type;
+  o.frequency.setValueAtTime(Math.max(1, f0), t0);
+  o.frequency.exponentialRampToValueAtTime(Math.max(1, f1), t0 + dur);
+  g.gain.setValueAtTime(vol, t0);
+  g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+  o.connect(g); g.connect(master);
+  o.start(t0); o.stop(t0 + dur + 0.03);
+}
+function noise(dur, vol, freq) {
+  if (!AC || muted) return;
+  const t0 = AC.currentTime;
+  const s = AC.createBufferSource(); s.buffer = noiseBuf; s.loop = true;
+  const g = AC.createGain(), f = AC.createBiquadFilter();
+  f.type = 'lowpass'; f.frequency.value = freq || 900;
+  g.gain.setValueAtTime(vol, t0);
+  g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+  s.connect(f); f.connect(g); g.connect(master);
+  s.start(t0); s.stop(t0 + dur + 0.03);
+}
+function sfxEat(size) {
+  if (size > player.size * 0.55) { tone(170, 55, 0.3, 'sine', 0.5); noise(0.2, 0.2, 500); }
+  else tone(950 - Math.min(650, size * 9), 300, 0.08, 'sine', 0.3);
+}
+function sfxHurt() { tone(230, 65, 0.35, 'sawtooth', 0.4); noise(0.25, 0.25, 400); }
+function sfxDash() { noise(0.16, 0.22, 1600); }
+function sfxSplash() { noise(0.22, 0.28, 700); }
+function sfxStage() { [660, 880, 1180].forEach((f, i) => tone(f, f, 0.13, 'triangle', 0.3, i * 0.09)); }
+function sfxWin() { [523, 659, 784, 1047, 784, 1047, 1319].forEach((f, i) => tone(f, f, 0.16, 'triangle', 0.32, i * 0.13)); }
+
+/* ------------------------------ 输入 ------------------------------ */
+const pointer = { sx: 0, sy: 0, active: false, downX: 0, downY: 0, downT: 0, down: false, moved: 0 };
+const keys = new Set();
+
+function screenToWorld(sx, sy) {
+  return { x: (sx - view.w / 2) / cam.z + cam.x, y: (sy - view.h / 2) / cam.z + cam.y };
+}
+function primaryAction() {
+  ensureAudio();
+  if (game.state === 'title') { startGame(); return; }
+  if ((game.state === 'over' || game.state === 'win') && game.stateT > 0.7) { startGame(); return; }
+  if (game.state === 'pause') { game.state = 'play'; return; }
+  if (game.state === 'play') dash();
+}
+canvas.addEventListener('pointerdown', e => {
+  pointer.down = true; pointer.moved = 0;
+  pointer.downX = e.clientX; pointer.downY = e.clientY; pointer.downT = performance.now();
+  pointer.sx = e.clientX; pointer.sy = e.clientY; pointer.active = true;
+  if (e.pointerType === 'mouse') {
+    if (hitHud(e.clientX, e.clientY)) return;
+    primaryAction();
+  }
+});
+canvas.addEventListener('pointermove', e => {
+  pointer.sx = e.clientX; pointer.sy = e.clientY; pointer.active = true;
+  if (pointer.down) pointer.moved = Math.max(pointer.moved, Math.hypot(e.clientX - pointer.downX, e.clientY - pointer.downY));
+});
+canvas.addEventListener('pointerup', e => {
+  if (pointer.down && e.pointerType !== 'mouse' && pointer.moved < 14 && performance.now() - pointer.downT < 300) {
+    if (!hitHud(e.clientX, e.clientY)) primaryAction();
+  }
+  pointer.down = false;
+});
+canvas.addEventListener('contextmenu', e => e.preventDefault());
+
+window.addEventListener('keydown', e => {
+  const k = e.key;
+  if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' '].includes(k)) e.preventDefault();
+  ensureAudio();
+  if (game.state === 'title') { startGame(); return; }
+  if ((game.state === 'over' || game.state === 'win') && game.stateT > 0.7) { startGame(); return; }
+  if (k === ' ' || k === 'Spacebar') { if (game.state === 'play') dash(); return; }
+  if (k === 'p' || k === 'P') { if (game.state === 'play') game.state = 'pause'; else if (game.state === 'pause') game.state = 'play'; return; }
+  if (k === 'm' || k === 'M') { muted = !muted; return; }
+  if (k === 'r' || k === 'R') { if (game.state !== 'title') startGame(); return; }
+  keys.add(k.length === 1 ? k.toLowerCase() : k);
+});
+window.addEventListener('keyup', e => keys.delete(e.key.length === 1 ? e.key.toLowerCase() : e.key));
+window.addEventListener('blur', () => { if (game.state === 'play') game.state = 'pause'; });
+
+function keyDir() {
+  let x = 0, y = 0;
+  if (keys.has('ArrowLeft') || keys.has('a')) x -= 1;
+  if (keys.has('ArrowRight') || keys.has('d')) x += 1;
+  if (keys.has('ArrowUp') || keys.has('w')) y -= 1;
+  if (keys.has('ArrowDown') || keys.has('s')) y += 1;
+  return (x || y) ? { x, y } : null;
+}
+
+/* ------------------------------ 粒子 / 飘字 / 特效 ------------------------------ */
+function bubble(x, y, r) {
+  parts.push({ kind: 'bub', x, y, vx: rand(-14, 14), vy: rand(-60, -20), r: r || rand(2, 6), t: 0, life: rand(0.6, 1.6) });
+}
+function spark(x, y, col, n, spd) {
+  for (let i = 0; i < (n || 8); i++) {
+    const a = rand(0, TAU), v = rand(0.3, 1) * (spd || 160);
+    parts.push({ kind: 'spk', x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, r: rand(2, 5), t: 0, life: rand(0.3, 0.7), col });
+  }
+}
+function ring(x, y, r, col) {
+  parts.push({ kind: 'ring', x, y, r: r * 0.3, r1: r, t: 0, life: 0.5, col });
+}
+function popText(x, y, txt, col, big) {
+  texts.push({ x, y, txt, col: col || '#fff', t: 0, life: 1.1, big: !!big });
+}
+
+/* ------------------------------ 生成 / 种群维持 ------------------------------ */
+function spawnAt(key, inView) {
+  const sp = SPECIES[key];
+  let x, y, size;
+  const band = ZONE[sp.z]();
+  const vw = view.w / cam.z / 2, vh = view.h / cam.z / 2;
+  if (inView) {
+    // 开局铺场：视野内 + 少量外溢
+    x = cam.x + rand(-(vw + 120), vw + 120);
+    y = cam.y + rand(-(vh + 120), vh + 120);
+  } else {
+    // 围绕镜头环形生成，保证玩家附近一直有猎物
+    const baseR = Math.hypot(vw, vh);
+    const ang = rand(0, TAU), rr = baseR + rand(60, 700);
+    x = cam.x + Math.cos(ang) * rr;
+    y = cam.y + Math.sin(ang) * rr * 0.8;
+  }
+  if (sp.z === 'city') {
+    x = clamp(x, CITY.x0 + 60, CITY.x1 - 60);
+    y = rand(CITY.y0, CITY.y1);
+  } else if (sp.z === 'float') {
+    x = clamp(x, 400, WORLD_W - 400);
+    y = SURFACE;
+  } else {
+    x = clamp(x, 300, WORLD_W - 300);
+    y = clamp(y, band[0], band[1]);
+  }
+  if (key === 'shark') {
+    const hunter = player.size > 55 && Math.random() < 0.55;
+    size = hunter ? clamp(player.size * rand(1.15, 1.75), 60, 900)
+                  : clamp(player.size * rand(0.5, 0.88), 40, 1200);
+    const en = makeEntity(key, x, y, size);
+    en.harm = hunter;
+    return en;
+  }
+  size = rand(sp.s[0], sp.s[1]);
+  const en = makeEntity(key, x, y, size);
+  if (sp.z === 'float') en.y = SURFACE - en.size * 0.45;
+  return en;
+}
+function makeEntity(key, x, y, size) {
+  const sp = SPECIES[key];
+  return {
+    key, e: sp.e, x, y, size,
+    vx: sp.cruise ? rand(0, 1) < 0.5 ? -sp.v : sp.v : rand(-sp.v, sp.v),
+    vy: 0, harm: false, t: rand(0, 10),
+    turnT: rand(0.5, 2.5), dir: rand(0, 1) < 0.5 ? -1 : 1
+  };
+}
+function spawnCelestials() {
+  const put = (key, x, y, s) => entities.push({ key, e: SPECIES[key].e, x, y, size: s, vx: 0, vy: 0, harm: false, t: rand(0, 10), celestial: true });
+  put('moon', 7200, -1400, 420);
+  put('moon', 15800, -2600, 380);
+  put('planet', 4600, -700, 680);
+  put('planet', 10200, -2200, 860);
+  put('planet', 14200, -900, 640);
+  put('planet', 21200, -2400, 760);
+  put('sat', 9800, 1900, 130);
+  entities.push({ key: 'earth', e: '🌍', x: 19400, y: -400, size: 1100, vx: 0, vy: 0, harm: false, t: 0, celestial: true });
+  entities.push({ key: 'sun', e: '☀️', x: SUN_POS.x, y: SUN_POS.y, size: SUN_SIZE, vx: 0, vy: 0, harm: true, t: 0, celestial: true });
+}
+let popT = 0;
+function maintain(dt) {
+  popT -= dt;
+  if (popT > 0) return;
+  popT = 0.5;
+  const counts = {};
+  for (const en of entities) counts[en.key] = (counts[en.key] || 0) + 1;
+  const deficits = [];
+  for (const key in SPECIES) {
+    const d = SPECIES[key].pop(player.size) - (counts[key] || 0);
+    if (d > 0) deficits.push({ key, d });
+  }
+  deficits.sort((a, b) => b.d - a.d);
+  let budget = 10;
+  for (const { key } of deficits) {
+    if (budget <= 0) break;
+    entities.push(spawnAt(key));
+    budget--;
+  }
+}
+
+/* ------------------------------ 游戏流程 ------------------------------ */
+function resetWorld() {
+  entities = []; parts.length = 0; texts.length = 0; chomps.length = 0; banners.length = 0;
+  player.x = WORLD_W / 2; player.y = 8600;
+  player.vx = player.vy = 0;
+  player.mass = 1; player.size = 16; player.dispSize = 16;
+  player.hearts = 3; player.invuln = 0; player.dashT = 0; player.dashCd = 0;
+  player.stage = 0; player.dir = 1;
+  game.score = 0; game.eaten = 0; game.maxSize = 16;
+  game.playT = 0; game.hintT = 14; game.flash = 0;
+  cam.x = player.x; cam.y = player.y; cam.z = cam.zt = clamp(80 / player.size, 0.05, 1.8);
+  cam.shake = 0;
+  spawnCelestials();
+  for (let i = 0; i < 26; i++) entities.push(spawnAt('microbe', true));
+  for (let i = 0; i < 10; i++) entities.push(spawnAt('smallfish', true));
+}
+function startGame() {
+  resetWorld();
+  game.state = 'play';
+  game.stateT = 0;
+}
+function gameOver() {
+  game.state = 'over'; game.stateT = 0;
+  tone(160, 40, 0.9, 'sawtooth', 0.4);
+}
+function winGame() {
+  game.state = 'win'; game.stateT = 0; game.flash = 1.2;
+  sfxWin();
+  ring(player.x, player.y, player.size * 8, 'rgba(255,240,180,0.95)');
+  spark(player.x, player.y, '#ffd977', 40, 500);
+}
+
+/* ------------------------------ 更新逻辑 ------------------------------ */
+function dash() {
+  if (player.dashCd > 0 || game.state !== 'play') return;
+  player.dashT = 0.55; player.dashCd = 1.5;
+  sfxDash();
+  spark(player.x, player.y, 'rgba(255,255,255,0.8)', 10, 120);
+}
+
+function updatePlayer(dt) {
+  const cosmic = player.stage >= 6;
+  const inWater = player.y > SURFACE - player.size * 0.25;
+  const spd = maxSpeed() * (player.dashT > 0 ? 2.3 : 1);
+
+  let tx = player.x, ty = player.y;
+  const kd = keyDir();
+  if (kd) {
+    tx = player.x + kd.x * 800; ty = player.y + kd.y * 800;
+  } else if (pointer.active) {
+    const w = screenToWorld(pointer.sx, pointer.sy);
+    tx = w.x; ty = w.y;
+  }
+  const dx = tx - player.x, dy = ty - player.y;
+  const d = Math.hypot(dx, dy) || 1;
+  const authority = cosmic ? 1 : (inWater ? 1 : 0.35);
+  const drive = Math.min(1, d / (view.h * 0.35 / cam.z)) * spd * authority;
+  const ctrl = Math.min(1, (inWater || cosmic ? 9 : 3.2) * dt);
+  player.vx += ((dx / d) * drive - player.vx) * ctrl;
+  player.vy += ((dy / d) * drive - player.vy) * ctrl;
+
+  if (!cosmic && !inWater) player.vy += GRAVITY * dt;
+
+  if (player.dashT > 0) {
+    player.dashT -= dt;
+    player.trail -= dt;
+    if (player.trail <= 0) { player.trail = 0.03; spark(player.x, player.y, 'rgba(180,225,255,0.7)', 2, 60); }
+  }
+  if (player.dashCd > 0) player.dashCd -= dt;
+  if (player.invuln > 0) player.invuln -= dt;
+
+  const wasWater = player.y > SURFACE;
+  player.x += player.vx * dt;
+  player.y += player.vy * dt;
+  const isWater = player.y > SURFACE;
+  if (wasWater !== isWater && Math.abs(player.vy) > 150) {
+    sfxSplash();
+    for (let i = 0; i < 12; i++) bubble(player.x + rand(-player.size, player.size), SURFACE, rand(3, 9));
+  }
+
+  // 世界边界
+  if (player.x < 40) { player.x = 40; player.vx = Math.abs(player.vx) * 0.3; }
+  if (player.x > WORLD_W - 40) { player.x = WORLD_W - 40; player.vx = -Math.abs(player.vx) * 0.3; }
+  const yMin = WORLD_TOP + 80, yMax = FLOOR - player.size * 0.2;
+  if (player.y < yMin) { player.y = yMin; player.vy = Math.abs(player.vy) * 0.3; }
+  if (player.y > yMax) { player.y = yMax; player.vy = Math.min(player.vy, 0); }
+
+  if (Math.abs(player.vx) > 12) player.dir = player.vx > 0 ? 1 : -1;
+  if (player.dispSize < player.size) player.dispSize = Math.min(player.size, player.dispSize + player.size * dt * 2.4);
+  else player.dispSize = lerp(player.dispSize, player.size, Math.min(1, dt * 6));
+
+  if (game.playT > 0 && inWater && Math.random() < dt * 3) bubble(player.x - player.dir * player.size, player.y, rand(1.5, 4));
+}
+
+function updateEntities(dt) {
+  const pr = player.dispSize;
+  for (let i = entities.length - 1; i >= 0; i--) {
+    const en = entities[i];
+    const sp = SPECIES[en.key];
+    if (!sp) continue;
+    en.t += dt;
+
+    if (sp.still) continue;
+
+    if (sp.celestial) {
+      en.x += en.vx * dt; en.y += en.vy * dt;
+      continue;
+    }
+    if (sp.cruise) {
+      en.x += en.vx * dt;
+      en.y += Math.sin(en.t * 1.4) * 4 * dt;
+      if (en.x < 300) { en.x = 300; en.vx = Math.abs(en.vx); }
+      if (en.x > WORLD_W - 300) { en.x = WORLD_W - 300; en.vx = -Math.abs(en.vx); }
+      if (sp.z === 'float') en.y = SURFACE - en.size * 0.45 + Math.sin(en.t * 1.8) * 5;
+      continue;
+    }
+    if (sp.patrol) {
+      en.x += en.vx * dt;
+      if (en.x < CITY.x0 + 60) { en.x = CITY.x0 + 60; en.vx = Math.abs(en.vx); }
+      if (en.x > CITY.x1 - 60) { en.x = CITY.x1 - 60; en.vx = -Math.abs(en.vx); }
+      continue;
+    }
+
+    // 通用游荡
+    en.turnT -= dt;
+    if (en.turnT <= 0) {
+      en.turnT = rand(0.8, 3);
+      en.dir = Math.random() < 0.5 ? -1 : 1;
+      en.vyTarget = rand(-sp.v, sp.v) * 0.4;
+    }
+    let vx = en.dir * sp.v, vy = en.vyTarget || 0;
+
+    // 逃跑：被更大的玩家盯上就跑
+    if (sp.flee && player.size > en.size * 1.15) {
+      const dd = Math.hypot(player.x - en.x, player.y - en.y);
+      if (dd < 1000 && dd > 1) {
+        vx = (en.x - player.x) / dd * sp.v * 1.45;
+        vy = (en.y - player.y) / dd * sp.v * 0.9;
+      }
+    }
+    // 猎鲨：比玩家大就追杀
+    if (sp.hunt && en.harm && player.size < en.size) {
+      const dd = Math.hypot(player.x - en.x, player.y - en.y);
+      if (dd < 2600 && dd > 1) {
+        const chaseV = Math.min(maxSpeed() * 0.88, 130 + en.size * 0.5);
+        vx = (player.x - en.x) / dd * chaseV;
+        vy = (player.y - en.y) / dd * chaseV;
+      }
+    }
+    en.vx = lerp(en.vx, vx, Math.min(1, dt * 3));
+    en.vy = lerp(en.vy, vy, Math.min(1, dt * 3));
+    en.x += en.vx * dt;
+    en.y += en.vy * dt;
+    if (Math.abs(en.vx) > 4) en.dir = en.vx > 0 ? 1 : -1;
+
+    // 栖息带：猎鲨追击时可离开深水带，进入全水域
+    const band = ZONE[sp.z]();
+    let yLo = band[0], yHi = band[1];
+    if (sp.hunt && en.harm && player.size < en.size &&
+        dist2(player.x, player.y, en.x, en.y) < 2600 * 2600) {
+      yLo = SURFACE + 150;
+      yHi = FLOOR - 100;
+    }
+    if (sp.z !== 'float') en.y = clamp(en.y, yLo, yHi);
+    en.x = clamp(en.x, 200, WORLD_W - 200);
+
+    // 远离视野的动态单位回收
+    const despawnR = Math.hypot(view.w, view.h) / cam.z * 0.85 + 1000;
+    if (dist2(en.x, en.y, player.x, player.y) > despawnR * despawnR) entities.splice(i, 1);
+  }
+}
+
+function eat(en) {
+  en.dead = true;
+  const sp = SPECIES[en.key];
+  player.mass += sp.n;
+  game.score += sp.score;
+  game.eaten++;
+  chomps.push({ e: en.e, x: en.x, y: en.y, size: en.size, dir: en.dir, t: 0 });
+  spark(en.x, en.y, 'rgba(255,255,255,0.85)', 6 + Math.min(14, en.size * 0.2), 60 + en.size * 2);
+  popText(en.x, en.y - en.size, '+' + sp.score, en.size > player.size * 0.5 ? '#ffd977' : '#eaf7ff', en.size > player.size * 0.5);
+  if (en.size > player.size * 0.45) cam.shake = Math.min(16, 4 + en.size * 0.06);
+  sfxEat(en.size);
+  refreshSize();
+  if (en.key === 'sun') winGame();
+}
+
+function hurt(en) {
+  if (player.invuln > 0) return;
+  player.hearts--;
+  player.invuln = 2.5;
+  player.mass = Math.max(1, player.mass * 0.92);
+  refreshSize();
+  cam.shake = 14;
+  sfxHurt();
+  spark(player.x, player.y, 'rgba(255,120,120,0.9)', 16, 260);
+  const dd = Math.hypot(player.x - en.x, player.y - en.y) || 1;
+  player.vx = (player.x - en.x) / dd * maxSpeed() * 1.6;
+  player.vy = (player.y - en.y) / dd * maxSpeed() * 1.6;
+  popText(player.x, player.y - player.size * 1.4, '被撞了！-' + (en.key === 'sun' ? '烫！' : '❤'), '#ff9d9d', true);
+  if (player.hearts <= 0) gameOver();
+}
+
+function updateCollisions() {
+  const pr = player.dispSize;
+  for (const en of entities) {
+    if (en.dead) continue;
+    const rr = (pr + en.size) * 0.88;
+    if (dist2(player.x, player.y, en.x, en.y) > rr * rr) continue;
+    const edible = en.key === 'sun'
+      ? player.size > en.size * 0.95
+      : en.size < player.size * 0.95;
+    if (edible) eat(en);
+    else if (en.harm) hurt(en);
+    else {
+      // 中性大块头：轻轻推开
+      const dd = Math.hypot(player.x - en.x, player.y - en.y) || 1;
+      const push = (rr - dd) * 0.5;
+      player.x += (player.x - en.x) / dd * push;
+      player.y += (player.y - en.y) / dd * push;
+    }
+  }
+  entities = entities.filter(e => !e.dead);
+}
+
+function updateFx(dt) {
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const p = parts[i];
+    p.t += dt;
+    if (p.kind === 'bub') { p.x += p.vx * dt; p.y += p.vy * dt; p.vy -= 30 * dt; }
+    else if (p.kind === 'spk') { p.x += p.vx * dt; p.y += p.vy * dt; p.vx *= 0.92; p.vy *= 0.92; }
+    if (p.t >= p.life) parts.splice(i, 1);
+  }
+  if (parts.length > 400) parts.splice(0, parts.length - 400);
+  for (let i = texts.length - 1; i >= 0; i--) {
+    const t = texts[i];
+    t.t += dt; t.y -= 46 * dt;
+    if (t.t >= t.life) texts.splice(i, 1);
+  }
+  for (let i = chomps.length - 1; i >= 0; i--) {
+    const c = chomps[i];
+    c.t += dt;
+    if (c.t > 0.28) chomps.splice(i, 1);
+  }
+  for (let i = banners.length - 1; i >= 0; i--) {
+    banners[i].t += dt;
+    if (banners[i].t > banners[i].life) banners.splice(i, 1);
+  }
+  if (game.flash > 0) game.flash -= dt * 1.6;
+  if (cam.shake > 0) cam.shake = Math.max(0, cam.shake - dt * 26);
+  if (game.hintT > 0) game.hintT -= dt;
+}
+
+function updateCamera(dt) {
+  cam.zt = clamp(80 / player.dispSize, 0.05, 1.8);
+  cam.z = lerp(cam.z, cam.zt, Math.min(1, dt * 2.2));
+  const halfW = view.w / 2 / cam.z, halfH = view.h / 2 / cam.z;
+  const tx = halfW * 2 >= WORLD_W ? WORLD_W / 2 : clamp(player.x, halfW, WORLD_W - halfW);
+  const ty = clamp(player.y, WORLD_TOP + halfH, Math.max(WORLD_TOP + halfH, FLOOR + 200 - halfH));
+  cam.x = lerp(cam.x, tx, Math.min(1, dt * 7));
+  cam.y = lerp(cam.y, ty, Math.min(1, dt * 7));
+}
+
+function update(dt) {
+  game.t += dt;
+  game.stateT += dt;
+  updateFx(dt);
+  if (game.state !== 'play') return;
+  game.playT += dt;
+  updatePlayer(dt);
+  updateEntities(dt);
+  updateCollisions();
+  maintain(dt);
+  updateCamera(dt);
+}
+
+/* ------------------------------ 渲染：背景 ------------------------------ */
+function buildDecor() {
+  stars = [];
+  for (let i = 0; i < 300; i++) {
+    stars.push({ x: rand(0, WORLD_W), y: rand(WORLD_TOP + 120, SPACE_Y - 120), r: rand(0.7, 2.3), p: rand(0, TAU) });
+  }
+  clouds = [];
+  for (let i = 0; i < 42; i++) {
+    clouds.push({ x: rand(0, WORLD_W), y: rand(SPACE_Y + 1300, SURFACE - 220), s: rand(90, 190), v: rand(4, 14), p: rand(0, TAU) });
+  }
+  kelps = [];
+  for (let i = 0; i < 70; i++) {
+    kelps.push({ x: rand(100, WORLD_W - 100), h: rand(120, 420), p: rand(0, TAU) });
+  }
+}
+
+function syOf(wy) { return (wy - cam.y) * cam.z + view.h / 2; }
+function sxOf(wx) { return (wx - cam.x) * cam.z + view.w / 2; }
+
+function drawBackground() {
+  const sTop = syOf(WORLD_TOP), sSpace = syOf(SPACE_Y), sSurf = syOf(SURFACE), sFloor = syOf(FLOOR);
+  // 太空
+  const g1 = ctx.createLinearGradient(0, Math.min(0, sTop), 0, sSpace);
+  g1.addColorStop(0, '#04061a');
+  g1.addColorStop(1, '#0b1233');
+  ctx.fillStyle = g1;
+  ctx.fillRect(0, 0, view.w, Math.max(0, sSpace));
+  // 天空
+  const g2 = ctx.createLinearGradient(0, sSpace, 0, sSurf);
+  g2.addColorStop(0, '#79b7e8');
+  g2.addColorStop(1, '#d8effb');
+  ctx.fillStyle = g2;
+  ctx.fillRect(0, Math.min(view.h, Math.max(0, sSpace)), view.w, Math.max(0, sSurf - sSpace));
+  // 海水
+  const g3 = ctx.createLinearGradient(0, sSurf, 0, Math.max(sFloor, sSurf + 1));
+  g3.addColorStop(0, '#2f86bf');
+  g3.addColorStop(0.5, '#14568c');
+  g3.addColorStop(1, '#07263f');
+  ctx.fillStyle = g3;
+  ctx.fillRect(0, Math.min(view.h, Math.max(0, sSurf)), view.w, Math.max(0, view.h - sSurf));
+  // 海底沉积
+  if (sFloor < view.h) {
+    ctx.fillStyle = '#0a1c26';
+    ctx.fillRect(0, sFloor, view.w, view.h - sFloor);
+  }
+
+  // 星星（屏幕恒定大小）
+  ctx.fillStyle = '#fff';
+  for (const st of stars) {
+    const sx = sxOf(st.x), sy = syOf(st.y);
+    if (sx < -4 || sx > view.w + 4 || sy < -4 || sy > sSpace + 4) continue;
+    ctx.globalAlpha = 0.35 + 0.55 * (0.5 + 0.5 * Math.sin(game.t * 2 + st.p));
+    ctx.beginPath();
+    ctx.arc(sx, sy, st.r, 0, TAU);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+
+  // 太阳光晕
+  const sunGx = sxOf(SUN_POS.x), sunGy = syOf(SUN_POS.y);
+  const glowR = SUN_SIZE * 2.4 * cam.z;
+  if (sunGx > -glowR && sunGx < view.w + glowR && sunGy > -glowR && sunGy < view.h + glowR) {
+    const gg = ctx.createRadialGradient(sunGx, sunGy, 0, sunGx, sunGy, glowR);
+    gg.addColorStop(0, 'rgba(255,214,110,0.55)');
+    gg.addColorStop(0.4, 'rgba(255,180,80,0.18)');
+    gg.addColorStop(1, 'rgba(255,170,60,0)');
+    ctx.fillStyle = gg;
+    ctx.fillRect(sunGx - glowR, sunGy - glowR, glowR * 2, glowR * 2);
+  }
+
+  // 云
+  for (const c of clouds) {
+    const sx = sxOf(c.x + Math.sin(game.t * 0.05 + c.p) * 260), sy = syOf(c.y);
+    const sz = c.s * cam.z * 2.15;
+    if (sx < -sz || sx > view.w + sz || sy < -sz || sy > view.h + sz || sSpace > view.h) continue;
+    ctx.globalAlpha = 0.75;
+    const sp = emojiSprite('☁️', sz);
+    ctx.drawImage(sp.c, sx - sp.half, sy - sp.half);
+    ctx.globalAlpha = 1;
+  }
+}
+
+/* 在世界坐标系中绘制的装饰（城市、海草、海床线） */
+function drawWorldDecor() {
+  // 沉城天际线
+  if (syOf(CITY.y1) > -50 && syOf(CITY.y0) < view.h + 50) {
+    ctx.fillStyle = '#0d2534';
+    for (let i = 0; i < 26; i++) {
+      const bw = 140 + hash(i) * 160;
+      const bh = 380 + hash(i + 40) * 720;
+      const bx = 420 + i * 246 + hash(i + 80) * 90;
+      ctx.fillRect(bx, CITY.y1 - bh, bw, bh);
+    }
+    ctx.fillStyle = 'rgba(120,190,230,0.16)';
+    for (let i = 0; i < 26; i++) {
+      const bx = 420 + i * 246 + hash(i + 80) * 90;
+      const bh = 380 + hash(i + 40) * 720;
+      const rows = Math.max(0, Math.floor((bh - 140) / 90));
+      for (let wy = 0; wy < rows; wy++) {
+        ctx.fillRect(bx + 24, CITY.y1 - bh + 60 + wy * 90, 20, 26);
+        ctx.fillRect(bx + 70, CITY.y1 - bh + 60 + wy * 90, 20, 26);
+      }
+    }
+  }
+  // 海床
+  if (syOf(FLOOR) > -60) {
+    ctx.fillStyle = '#123240';
+    ctx.fillRect(-1000, FLOOR, WORLD_W + 2000, 900);
+    ctx.fillStyle = 'rgba(255,255,255,0.06)';
+    ctx.fillRect(-1000, FLOOR, WORLD_W + 2000, 26);
+  }
+  // 海草
+  if (syOf(FLOOR) > -200) {
+    ctx.strokeStyle = 'rgba(24,92,80,0.8)';
+    ctx.lineWidth = 10;
+    for (const k of kelps) {
+      const sx = sxOf(k.x);
+      if (sx < -80 || sx > view.w + 80) continue;
+      const sway = Math.sin(game.t * 0.9 + k.p) * 40;
+      ctx.beginPath();
+      ctx.moveTo(k.x, FLOOR);
+      ctx.quadraticCurveTo(k.x + sway, FLOOR - k.h * 0.6, k.x + sway * 1.8, FLOOR - k.h);
+      ctx.stroke();
+    }
+  }
+  // 海平面波浪
+  if (syOf(SURFACE) > -80 && syOf(SURFACE) < view.h + 80) {
+    ctx.strokeStyle = 'rgba(235,250,255,0.85)';
+    ctx.lineWidth = Math.max(1.5, 5 * Math.min(1, cam.z));
+    ctx.beginPath();
+    for (let sx = -20; sx <= view.w + 20; sx += 22) {
+      const wx = (sx - view.w / 2) / cam.z + cam.x;
+      const wy = SURFACE + Math.sin(wx * 0.004 + game.t * 1.7) * 13 + Math.sin(wx * 0.0013 - game.t * 0.9) * 9;
+      const yy = syOf(wy);
+      if (sx === -20) ctx.moveTo(sx, yy); else ctx.lineTo(sx, yy);
+    }
+    ctx.stroke();
+  }
+}
+
+/* ------------------------------ 渲染：实体 ------------------------------ */
+function drawEntities() {
+  for (const en of entities) {
+    const sx = sxOf(en.x), sy = syOf(en.y);
+    const sz = en.size * 2.15 * cam.z;
+    if (sx < -sz || sx > view.w + sz || sy < -sz || sy > view.h + sz) continue;
+    const flip = en.vx < 0 ? true : en.vx > 0 ? false : en.dir < 0;
+    if (en.key === 'sun') {
+      const pulse = 1 + Math.sin(game.t * 2.2) * 0.04;
+      drawEmoji('☀️', en.x, en.y, en.size * 1.18 * pulse, false);
+      continue;
+    }
+    if (en.celestial || SPECIES[en.key].celestial) drawEmoji(en.e, en.x, en.y, en.size * 1.05, false);
+    else drawEmoji(en.e, en.x, en.y, en.size, flip);
+    if (en.harm && cam.z > 0.3) {
+      // 猎鲨警示圈
+      ctx.strokeStyle = 'rgba(255,90,90,' + (0.25 + 0.15 * Math.sin(game.t * 6)) + ')';
+      ctx.lineWidth = 3 / cam.z;
+      ctx.beginPath();
+      ctx.arc(en.x, en.y, en.size * 1.35, 0, TAU);
+      ctx.stroke();
+    }
+  }
+  // 吞咽动画
+  for (const c of chomps) {
+    const k = 1 - c.t / 0.28;
+    ctx.globalAlpha = k;
+    drawEmoji(c.e, lerp(c.x, player.x, c.t / 0.28), lerp(c.y, player.y, c.t / 0.28), c.size * k, c.dir < 0);
+    ctx.globalAlpha = 1;
+  }
+}
+
+function drawPlayer() {
+  const s = player.dispSize;
+  if (player.invuln > 0 && Math.floor(game.t * 12) % 2 === 0) return;
+  // 冲刺冷却环
+  if (player.dashCd > 0 && game.state === 'play') {
+    ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+    ctx.lineWidth = 3 / cam.z;
+    ctx.beginPath();
+    ctx.arc(player.x, player.y, s * 1.6, -Math.PI / 2, -Math.PI / 2 + TAU * (1 - player.dashCd / 1.5));
+    ctx.stroke();
+  }
+  ctx.save();
+  ctx.translate(player.x, player.y);
+  ctx.rotate(clamp(player.vy / (maxSpeed() * 1.4), -0.55, 0.55) * player.dir);
+  ctx.scale(-player.dir, 1);   // 鱼类 emoji 原生朝左：向右游(dir=1)时镜像
+  const st = STAGES[player.stage];
+  const px = s * 2.3;
+  const sp = emojiSprite(st.e, px);
+  ctx.drawImage(sp.c, -sp.half, -sp.half);
+  ctx.restore();
+  if (player.invuln > 0) {
+    ctx.strokeStyle = 'rgba(255,255,255,' + (player.invuln / 2.5 * 0.6) + ')';
+    ctx.lineWidth = 3 / cam.z;
+    ctx.beginPath();
+    ctx.arc(player.x, player.y, s * 1.5, 0, TAU);
+    ctx.stroke();
+  }
+}
+
+function drawFx() {
+  for (const p of parts) {
+    const k = 1 - p.t / p.life;
+    if (p.kind === 'bub') {
+      ctx.strokeStyle = 'rgba(220,245,255,' + (0.6 * k) + ')';
+      ctx.lineWidth = 1.5 / cam.z;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.r, 0, TAU);
+      ctx.stroke();
+    } else if (p.kind === 'spk') {
+      ctx.fillStyle = p.col;
+      ctx.globalAlpha = k;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.r * k, 0, TAU);
+      ctx.fill();
+      ctx.globalAlpha = 1;
+    } else if (p.kind === 'ring') {
+      const r = lerp(p.r, p.r1, p.t / p.life);
+      ctx.strokeStyle = p.col;
+      ctx.globalAlpha = k;
+      ctx.lineWidth = 6 / cam.z;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, r, 0, TAU);
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+    }
+  }
+  // 飘字（屏幕空间，保证任何缩放下可读）
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  for (const t of texts) {
+    const k = 1 - t.t / t.life;
+    ctx.globalAlpha = Math.min(1, k * 2);
+    ctx.font = (t.big ? 700 : 600) + ' ' + (t.big ? 24 : 16) + 'px "PingFang SC","Microsoft YaHei",sans-serif';
+    ctx.fillStyle = 'rgba(0,0,0,0.45)';
+    ctx.fillText(t.txt, sxOf(t.x) + 1.5, syOf(t.y) + 1.5);
+    ctx.fillStyle = t.col;
+    ctx.fillText(t.txt, sxOf(t.x), syOf(t.y));
+    ctx.globalAlpha = 1;
+  }
+}
+
+/* ------------------------------ 渲染：HUD 与界面 ------------------------------ */
+function rr(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+const hudHits = [];
+function hitHud(x, y) {
+  for (const b of hudHits) {
+    if (x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h) { b.fn(); return true; }
+  }
+  return false;
+}
+function chip(x, y, w, h) {
+  ctx.fillStyle = 'rgba(4,18,32,0.55)';
+  rr(x, y, w, h, 12);
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(255,255,255,0.14)';
+  ctx.lineWidth = 1;
+  ctx.stroke();
+}
+
+function drawHUD() {
+  hudHits.length = 0;
+  const st = STAGES[player.stage];
+  // 左上：阶段进度
+  chip(14, 14, 330, 76);
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  const sp = emojiSprite(st.e, 34);
+  ctx.drawImage(sp.c, 26, 26);
+  ctx.fillStyle = '#eaf7ff';
+  ctx.font = '600 16px "PingFang SC","Microsoft YaHei",sans-serif';
+  ctx.fillText(st.name, 72, 34);
+  ctx.font = '400 12px "PingFang SC","Microsoft YaHei",sans-serif';
+  ctx.fillStyle = 'rgba(234,247,255,0.65)';
+  ctx.fillText('体型 ×' + (player.dispSize / 16).toFixed(1), 72, 56);
+
+  const next = STAGES[player.stage + 1];
+  const goal = next ? next.size : SUN_SIZE * 0.95;
+  const from = next ? st.size : STAGES[STAGES.length - 1].size;
+  const prog = clamp((player.size - from) / (goal - from), 0, 1);
+  ctx.fillStyle = 'rgba(255,255,255,0.16)';
+  rr(72, 70, 176, 8, 4); ctx.fill();
+  ctx.fillStyle = next ? '#7fd4ff' : '#ffd977';
+  rr(72, 70, Math.max(6, 176 * prog), 8, 4); ctx.fill();
+  ctx.font = '400 11px "PingFang SC","Microsoft YaHei",sans-serif';
+  ctx.fillStyle = 'rgba(234,247,255,0.6)';
+  ctx.fillText(next ? '下一形态 ' + next.e : '距离吞掉太阳 ☀️', 72 + 182, 74);
+
+  // 右上：按钮 + 红心 + 分数（自上而下排列）
+  let hx = view.w - 14;
+  const iconBtn = (ch, fn) => {
+    hx -= 44;
+    chip(hx, 14, 36, 36);
+    const s = emojiSprite(ch, 20);
+    ctx.drawImage(s.c, hx + 8, 22);
+    hudHits.push({ x: hx, y: 14, w: 36, h: 36, fn });
+    return hx;
+  };
+  iconBtn('🔄', () => startGame());
+  iconBtn(muted ? '🔇' : '🔊', () => { muted = !muted; });
+  iconBtn('⏸️', () => { if (game.state === 'play') game.state = 'pause'; });
+
+  for (let i = 0; i < 3; i++) {
+    const s2 = emojiSprite(i < player.hearts ? '❤️' : '🖤', 22);
+    ctx.drawImage(s2.c, view.w - 110 + i * 32, 60);
+  }
+
+  ctx.textAlign = 'right';
+  ctx.textBaseline = 'middle';
+  ctx.font = '600 18px "PingFang SC","Microsoft YaHei",sans-serif';
+  ctx.fillStyle = '#eaf7ff';
+  ctx.fillText(game.score.toLocaleString() + ' 分', view.w - 14, 104);
+  ctx.font = '400 12px "PingFang SC","Microsoft YaHei",sans-serif';
+  ctx.fillStyle = 'rgba(234,247,255,0.65)';
+  ctx.fillText('已吞 ' + game.eaten, view.w - 14, 126);
+
+  // 操作提示
+  if (game.hintT > 0 && game.state === 'play') {
+    ctx.globalAlpha = Math.min(1, game.hintT);
+    ctx.textAlign = 'center';
+    ctx.font = '400 14px "PingFang SC","Microsoft YaHei",sans-serif';
+    ctx.fillStyle = 'rgba(234,247,255,0.85)';
+    ctx.fillText('移动：鼠标 / 触摸 / WASD · 冲刺：点击 / 空格 · 静音 M · 暂停 P', view.w / 2, view.h - 26);
+    ctx.globalAlpha = 1;
+  }
+
+  // 阶段横幅
+  let by = view.h * 0.24;
+  for (const b of banners) {
+    const k = b.t < 0.3 ? b.t / 0.3 : b.t > b.life - 0.5 ? Math.max(0, (b.life - b.t) / 0.5) : 1;
+    ctx.globalAlpha = k;
+    ctx.textAlign = 'center';
+    ctx.font = '700 34px "PingFang SC","Microsoft YaHei",sans-serif';
+    ctx.fillStyle = 'rgba(4,18,32,0.6)';
+    ctx.fillText(b.txt, view.w / 2 + 2, by + 2);
+    ctx.fillStyle = '#ffd977';
+    ctx.fillText(b.txt, view.w / 2, by);
+    ctx.font = '400 17px "PingFang SC","Microsoft YaHei",sans-serif';
+    ctx.fillStyle = '#eaf7ff';
+    ctx.fillText(b.sub, view.w / 2, by + 38);
+    ctx.globalAlpha = 1;
+    by += 86;
+  }
+
+  // 终局指引：太阳箭头
+  if (player.stage >= 6 && game.state === 'play') {
+    const sunS = { x: sxOf(SUN_POS.x), y: syOf(SUN_POS.y) };
+    if (sunS.x < -40 || sunS.x > view.w + 40 || sunS.y < -40 || sunS.y > view.h + 40) {
+      const cx = view.w / 2, cy = view.h / 2;
+      const a = Math.atan2(sunS.y - cy, sunS.x - cx);
+      const ax = cx + Math.cos(a) * (Math.min(view.w, view.h) / 2 - 70);
+      const ay = cy + Math.sin(a) * (Math.min(view.w, view.h) / 2 - 70);
+      ctx.save();
+      ctx.translate(ax, ay);
+      ctx.rotate(a);
+      ctx.fillStyle = 'rgba(255,217,119,0.9)';
+      ctx.beginPath();
+      ctx.moveTo(16, 0); ctx.lineTo(-10, -10); ctx.lineTo(-10, 10);
+      ctx.closePath(); ctx.fill();
+      ctx.restore();
+      const s3 = emojiSprite('☀️', 22);
+      ctx.drawImage(s3.c, ax - 11, ay - 40);
+    }
+  }
+}
+
+function panel(title, lines, btnTxt, tint) {
+  ctx.fillStyle = 'rgba(3,12,22,0.62)';
+  ctx.fillRect(0, 0, view.w, view.h);
+  const pw = Math.min(560, view.w - 48), ph = 300;
+  const px = (view.w - pw) / 2, py = (view.h - ph) / 2;
+  ctx.fillStyle = 'rgba(8,30,50,0.92)';
+  rr(px, py, pw, ph, 18); ctx.fill();
+  ctx.strokeStyle = 'rgba(255,255,255,0.16)'; ctx.lineWidth = 1; ctx.stroke();
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.font = '700 34px "PingFang SC","Microsoft YaHei",sans-serif';
+  ctx.fillStyle = tint;
+  ctx.fillText(title, view.w / 2, py + 62);
+  ctx.font = '400 16px "PingFang SC","Microsoft YaHei",sans-serif';
+  ctx.fillStyle = '#eaf7ff';
+  lines.forEach((ln, i) => ctx.fillText(ln, view.w / 2, py + 116 + i * 28));
+  const k = 0.75 + 0.25 * Math.sin(game.t * 3);
+  ctx.globalAlpha = k;
+  ctx.font = '600 18px "PingFang SC","Microsoft YaHei",sans-serif';
+  ctx.fillStyle = '#ffd977';
+  ctx.fillText(btnTxt, view.w / 2, py + ph - 44);
+  ctx.globalAlpha = 1;
+}
+
+function fmtTime(s) {
+  const m = Math.floor(s / 60), ss = Math.floor(s % 60);
+  return m + ' 分 ' + (ss < 10 ? '0' : '') + ss + ' 秒';
+}
+
+function drawTitle() {
+  ctx.fillStyle = 'rgba(3,12,22,0.45)';
+  ctx.fillRect(0, 0, view.w, view.h);
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  const cy = view.h / 2;
+  // 装饰鱼群
+  for (let i = 0; i < 6; i++) {
+    const x = ((game.t * (26 + i * 9) + i * 460) % (view.w + 300)) - 150;
+    const y = cy - 190 + i * 66 + Math.sin(game.t * 1.4 + i * 2) * 14;
+    const s4 = emojiSprite(['🦠', '🐟', '🐠', '🦭', '✈️', '🦈'][i], 26 + i * 7);
+    ctx.globalAlpha = 0.85;
+    ctx.drawImage(s4.c, i % 2 ? x : view.w - x, y);
+    ctx.globalAlpha = 1;
+  }
+  ctx.font = '700 clamp(40px, 8vw, 72px) "PingFang SC","Microsoft YaHei",sans-serif';
+  ctx.fillStyle = 'rgba(4,18,32,0.7)';
+  ctx.fillText('吞 噬 进 化', view.w / 2 + 3, cy - 34 + 3);
+  ctx.fillStyle = '#ffd977';
+  ctx.fillText('吞 噬 进 化', view.w / 2, cy - 34);
+  ctx.font = '400 17px "PingFang SC","Microsoft YaHei",sans-serif';
+  ctx.fillStyle = '#eaf7ff';
+  ctx.fillText('从一条小鱼吃起：微生物 → 小鱼 → 海豹企鹅 → 飞机路障 → 更大的鲨鱼', view.w / 2, cy + 26);
+  ctx.fillText('最后冲出海洋，把整个太阳系一口吞掉 ☀️', view.w / 2, cy + 56);
+  ctx.font = '400 14px "PingFang SC","Microsoft YaHei",sans-serif';
+  ctx.fillStyle = 'rgba(234,247,255,0.7)';
+  ctx.fillText('🦠 → 🐟 → 🐬 → 🐋 → 🦈 → 🛸 → 🕳️ → ☀️', view.w / 2, cy + 98);
+  const k = 0.7 + 0.3 * Math.sin(game.t * 3);
+  ctx.globalAlpha = k;
+  ctx.font = '600 20px "PingFang SC","Microsoft YaHei",sans-serif';
+  ctx.fillStyle = '#ffd977';
+  ctx.fillText('点击 / 按任意键 开始', view.w / 2, cy + 150);
+  ctx.globalAlpha = 1;
+}
+
+function drawOver() {
+  panel('💀 被更大的鱼吃掉了',
+    ['得分 ' + game.score.toLocaleString() + ' · 吞掉 ' + game.eaten + ' 只 · 最大体型 ×' + (game.maxSize / 16).toFixed(1),
+     '存活 ' + fmtTime(game.playT),
+     '别灰心，鲨鱼只是暂时比你大。'],
+    '点击 / 按任意键 再来一次', '#ff9d9d');
+}
+
+function drawWin() {
+  panel('🌞 整个太阳系都是你的了',
+    ['得分 ' + game.score.toLocaleString() + ' · 吞掉 ' + game.eaten + ' 只 · 最终体型 ×' + (game.maxSize / 16).toFixed(1),
+     '用时 ' + fmtTime(game.playT),
+     '微生物、小鱼、海豹、企鹅、飞机、路障、鲨鱼……一个都没跑掉。'],
+    '点击 / 按任意键 再吞一遍', '#ffd977');
+}
+
+function drawPause() {
+  ctx.fillStyle = 'rgba(3,12,22,0.5)';
+  ctx.fillRect(0, 0, view.w, view.h);
+  ctx.textAlign = 'center';
+  ctx.font = '700 34px "PingFang SC","Microsoft YaHei",sans-serif';
+  ctx.fillStyle = '#eaf7ff';
+  ctx.fillText('⏸ 已暂停', view.w / 2, view.h / 2 - 12);
+  ctx.font = '400 15px "PingFang SC","Microsoft YaHei",sans-serif';
+  ctx.fillStyle = 'rgba(234,247,255,0.75)';
+  ctx.fillText('按 P 或点击继续 · R 重新开始', view.w / 2, view.h / 2 + 28);
+}
+
+function render() {
+  ctx.setTransform(view.dpr, 0, 0, view.dpr, 0, 0);
+  const shX = cam.shake > 0 ? rand(-1, 1) * cam.shake * 0.5 : 0;
+  const shY = cam.shake > 0 ? rand(-1, 1) * cam.shake * 0.5 : 0;
+
+  drawBackground();
+
+  ctx.save();
+  ctx.translate(view.w / 2 + shX, view.h / 2 + shY);
+  ctx.scale(cam.z, cam.z);
+  ctx.translate(-cam.x, -cam.y);
+
+  drawWorldDecor();
+  drawEntities();
+  if (game.state !== 'title') drawPlayer();
+  drawFx();
+
+  ctx.restore();
+
+  if (game.flash > 0) {
+    ctx.fillStyle = 'rgba(255,246,220,' + Math.min(1, game.flash) + ')';
+    ctx.fillRect(0, 0, view.w, view.h);
+  }
+  if (player.hearts === 1 && game.state === 'play') {
+    const k = 0.12 + 0.08 * Math.sin(game.t * 5);
+    const vg = ctx.createRadialGradient(view.w / 2, view.h / 2, Math.min(view.w, view.h) * 0.36, view.w / 2, view.h / 2, Math.max(view.w, view.h) * 0.72);
+    vg.addColorStop(0, 'rgba(255,40,40,0)');
+    vg.addColorStop(1, 'rgba(255,40,40,' + k + ')');
+    ctx.fillStyle = vg;
+    ctx.fillRect(0, 0, view.w, view.h);
+  }
+
+  if (game.state === 'play' || game.state === 'pause') drawHUD();
+  if (game.state === 'title') drawTitle();
+  else if (game.state === 'over') drawOver();
+  else if (game.state === 'win') drawWin();
+  else if (game.state === 'pause') drawPause();
+}
+
+/* ------------------------------ 主循环 ------------------------------ */
+let last = performance.now(), acc = 0;
+function frame(now) {
+  let raw = (now - last) / 1000;
+  last = now;
+  if (raw > 0.25) raw = STEP;
+  acc += raw;
+  let n = 0;
+  while (acc >= STEP && n < 6) { update(STEP); acc -= STEP; n++; }
+  render();
+  requestAnimationFrame(frame);
+}
+
+/* ------------------------------ 调试钩子（供自动化测试） ------------------------------ */
+window.__game = {
+  get game() { return game; },
+  player, STAGES, SUN_SIZE,
+  get cam() { return cam; },
+  get entities() { return entities; },
+  setSize(s) { player.mass = (s / 16) * (s / 16); refreshSize(); },
+  addMass(n) { player.mass += n; refreshSize(); },
+  step(n) { for (let i = 0; i < n; i++) { update(STEP); render(); } },
+  teleport(x, y) { player.x = x; player.y = y; cam.x = x; cam.y = y; },
+  start: startGame
+};
+
+/* ------------------------------ 启动 ------------------------------ */
+window.addEventListener('resize', resize);
+window.addEventListener('orientationchange', () => setTimeout(resize, 120));
+
+resize();
+buildDecor();
+resetWorld();
+game.state = 'title';
+requestAnimationFrame(frame);
+
+})();
+</script>
+</body>
+</html>
