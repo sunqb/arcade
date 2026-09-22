@@ -101,8 +101,10 @@ const G = 2400, JUMPV = 880;
 
 /* ---- game state ---- */
 let mode = 'title';                        /* title | playing | dying | paused | over */
-let hearts = 3, inv = 0, dipT = 0, slipT = 0, redFlash = 0, dieT = 0;
+const MAX_HP = 10;
+let hearts = MAX_HP, inv = 0, dipT = 0, slipT = 0, redFlash = 0, dieT = 0;
 let runScroll = 0, playT = 0, coinCount = 0, bonus = 0, best = 0, lastMile = 0;
+let combo = 0, comboT = 0, maxJumpY = 0;
 let newBest = false, overAt = 0;
 let obstacles = [], coinsA = [], debris = [], floaters = [];
 let nextAt = 0, lastWx = 0, spawnInit = false;
@@ -1348,6 +1350,11 @@ function tryJump() {
 
 function land(k) {
   airborne = false; rampAir = false;
+  if (maxJumpY > 4.6 * R && mode === 'playing') {
+    bonus += 40;
+    floater(riderX, groundY - 11.5 * R, '飞得高！+40', '#FFD98A', 18);
+  }
+  maxJumpY = 0;
   jumpY = 0; jumpV = 0;
   sqV   += 2.9;
   boxV  -= 560 * k;
@@ -1407,8 +1414,8 @@ function coinArc(wx, topH, span) {
 function spawnWave(wx, diff) {
   const u = R;
   const table = [
-    ['cone', 2.6], ['bin', 2.2], ['barrier', 2.0], ['crates', 1.4],
-    ['puddle', 1.8], ['lowbar', 1.6], ['pigeons', 1.1], ['bump', 1.8]
+    ['cone', 2.8], ['bin', 2.4], ['barrier', 1.8], ['crates', 1.2],
+    ['puddle', 1.8], ['lowbar', 1.5], ['pigeons', 1.0], ['bump', 2.2]
   ];
   let kind = weightedPick(table);
   if ((kind === 'lowbar' || kind === 'pigeons') && wx - lastWx < speed * 1.15) kind = 'cone';
@@ -1419,10 +1426,10 @@ function spawnWave(wx, diff) {
     bump: [4.6, 9], cone: [3.0, 6], bin: [3.4, 7],
     barrier: [4.0, 10], crates: [5.6, 11]
   }[kind];
-  if (arc && Math.random() < 0.62) coinArc(wx, arc[0], arc[1]);
+  if (arc && Math.random() < 0.70) coinArc(wx, arc[0], arc[1]);
 
   // ground train in the gap behind the wave
-  if (Math.random() < 0.30) {
+  if (Math.random() < 0.35) {
     const n = 3 + (Math.random() * 3 | 0);
     const start = wx + speed * 0.55;
     for (let i = 0; i < n; i++) {
@@ -1432,13 +1439,13 @@ function spawnWave(wx, diff) {
         phase: rand(0, 6), got: false
       });
     }
-    if (hearts < 3 && Math.random() < 0.35) {
+    if (hearts <= 6 && Math.random() < 0.35) {
       coinsA.push({ wx: start - 1.6 * u, h: 1.8, phase: rand(0, 6), got: false, heart: true });
     }
   }
 
   // staggered pair at higher difficulty
-  if (diff > 0.4 && (kind === 'cone' || kind === 'bin') && Math.random() < 0.3) {
+  if (diff > 0.55 && (kind === 'cone' || kind === 'bin') && Math.random() < 0.22) {
     obstacles.push({ kind: 'cone', wx: wx + speed * 0.42, seed: Math.random() * 100, used: false });
     lastWx = wx + speed * 0.5;
   }
@@ -1515,6 +1522,25 @@ function updateObstacles(dt) {
       }
     }
 
+    /* near-miss reward: skim over a hazard without touching it */
+    if (mode === 'playing' && !o.dead) {
+      const top = { cone: 1.35, bin: 2.5, barrier: 2.05, crates: 4.3 }[o.kind];
+      if (top && !o.scored) {
+        const ohw = { cone: 0.7, bin: 1.05, barrier: 2.1, crates: 1.35 }[o.kind] * u;
+        if (airborne && Math.abs(x - riderX) < 2.0 * u + ohw) {
+          const clear = jumpY - top * u;
+          o.minClear = o.minClear === undefined ? clear : Math.min(o.minClear, clear);
+        }
+        if (o.minClear !== undefined && x + ohw < riderX - 2.2 * u) {
+          o.scored = true;
+          if (o.minClear > 0 && o.minClear < 1.0 * u) {
+            bonus += 80;
+            floater(x, groundY - (top + 1.7) * u, '好险！+80', '#FF9A5C', 19);
+          }
+        }
+      }
+    }
+
     // puddle slip — no damage, just a scare
     if (active && o.kind === 'puddle' && !airborne && slipT <= 0 &&
         Math.abs(x - riderX) < 3.2 * u && jumpY < 0.3 * u) {
@@ -1537,9 +1563,9 @@ function updateCoins() {
     c.got = true;
     const y = groundY - cy - 0.6 * u;
     if (c.heart) {
-      if (hearts < 3) {
-        hearts++;
-        floater(x, y - 14, '♥ +1', '#FF7B70', 20);
+      if (hearts < MAX_HP) {
+        hearts = Math.min(MAX_HP, hearts + 2);
+        floater(x, y - 14, '♥ +2', '#FF7B70', 20);
         sparkle(x, y, ['#FF7B70', '#FFFDF6', '#FFC0B8']);
       } else {
         bonus += 50;
@@ -1548,7 +1574,12 @@ function updateCoins() {
       }
     } else {
       coinCount++;
-      floater(x, y - 14, '+25', '#FFD98A', 17);
+      combo = comboT > 0 ? combo + 1 : 1;
+      comboT = 2.6;
+      const val = 25 + Math.min(combo - 1, 10) * 5;
+      if (val > 25) bonus += val - 25;
+      floater(x, y - 14, '+' + val, combo >= 4 ? '#FF9A5C' : '#FFD98A', 17 + Math.min(combo, 8));
+      if (combo >= 3) floater(x, y - 46, '连击 ×' + combo, '#FFC93C', 16 + Math.min(combo * 1.2, 9));
       sparkle(x, y, ['#FFD98A', '#FFFDF6', '#FFC93C']);
     }
   }
@@ -1565,7 +1596,7 @@ function update(dt) {
   if (mode === 'playing') playT += dt;
   if (mode === 'dying')   dieT  += dt;
   const diff = mode === 'playing' ? clamp(playT / 95, 0, 1) : 0;
-  const ramp = mode === 'playing' ? Math.min(300, playT * 4.2) : 0;
+  const ramp = mode === 'playing' ? Math.min(220, playT * 2.8) : 0;
 
   let mul = 1;
   const groundSlow = airborne ? 1 : lerp(1, 0.84, cq);
@@ -1598,6 +1629,7 @@ function update(dt) {
 
   if (inv > 0) inv -= dt;
   if (redFlash > 0) redFlash -= dt * 1.6;
+  if (comboT > 0) { comboT -= dt; if (comboT <= 0) combo = 0; }
 
   boxTimer -= dt;
   if (boxTimer <= 0) { boxTimer = rand(2.4, 4.4); boxV -= 300 * k; }
@@ -1614,6 +1646,7 @@ function update(dt) {
       best = Math.max(best, finalScore());
     }
   } else if (airborne) {
+    maxJumpY = Math.max(maxJumpY, jumpY);
     let gm = 1;
     if (crouchKey) gm = 2.2;                             // fast-fall
     else if (jumpV > 0) gm = (jumpKey || rampAir) ? 0.52 : 1.55;   // hold = higher
@@ -1633,7 +1666,7 @@ function update(dt) {
     let guard = 0;
     while (nextAt - scroll < W + 420 && guard++ < 8) {
       spawnWave(nextAt, diff);
-      nextAt += Math.max(speed * rand(0.95, 1.7) * (1.32 - 0.5 * diff), speed * 0.9);
+      nextAt += Math.max(speed * rand(1.05, 1.8) * (1.55 - 0.45 * diff), speed * 1.05);
     }
   }
 
@@ -1647,7 +1680,8 @@ function update(dt) {
     const m = Math.floor(runScroll / 40);
     if (m >= lastMile + 500) {
       lastMile += 500;
-      floater(W / 2, H * 0.30, lastMile + 'm！', '#FFD98A', 32);
+      bonus += 100;
+      floater(W / 2, H * 0.30, lastMile + 'm！奖励 +100', '#FFD98A', 30);
       floaters[floaters.length - 1].max = 1.4;
     }
   }
@@ -1698,9 +1732,11 @@ function drawHUD() {
   ctx.textAlign = 'left';
 
   // hearts
-  for (let i = 0; i < 3; i++) {
-    const hx = 30 + i * 40, hy = 30;
-    heartPath(hx, hy, 13);
+  const hs = clamp(W * 0.009, 8, 12);
+  const hgap = hs * 2.3;
+  for (let i = 0; i < MAX_HP; i++) {
+    const hx = 26 + i * hgap, hy = 28;
+    heartPath(hx, hy, hs);
     if (i < hearts) {
       ctx.fillStyle = '#FF5A4E'; ctx.fill();
       ctx.strokeStyle = 'rgba(11,26,34,.75)'; ctx.lineWidth = 2.5; ctx.stroke();
@@ -1724,6 +1760,18 @@ function drawHUD() {
   ctx.shadowColor = 'rgba(11,26,34,.6)'; ctx.shadowBlur = 4; ctx.shadowOffsetY = 1.5;
   ctx.fillText('× ' + coinCount, 46, 67);
   ctx.shadowColor = 'transparent'; ctx.shadowBlur = 0; ctx.shadowOffsetY = 0;
+
+  // combo chain
+  if (combo >= 2 && comboT > 0) {
+    ctx.textAlign = 'left';
+    ctx.font = 'bold 15px "PingFang SC",sans-serif';
+    ctx.globalAlpha = clamp(comboT / 0.7, 0, 1);
+    ctx.fillStyle = '#FF9A5C';
+    ctx.shadowColor = 'rgba(11,26,34,.6)'; ctx.shadowBlur = 4; ctx.shadowOffsetY = 1.5;
+    ctx.fillText('连击 ×' + combo, 26, 94);
+    ctx.shadowColor = 'transparent'; ctx.shadowBlur = 0; ctx.shadowOffsetY = 0;
+    ctx.globalAlpha = 1;
+  }
 
   // score block, right
   ctx.textAlign = 'right';
@@ -1779,7 +1827,7 @@ function drawTitle() {
   ctx.textAlign = 'center';
   ctx.font = '14px "PingFang SC",sans-serif';
   ctx.fillStyle = 'rgba(251,239,221,.68)';
-  ctx.fillText('躲开路障，收好小费，别把外卖摔了。', cx, y + 52);
+  ctx.fillText('擦身闪过、连收小费都有加成，别把外卖摔了。', cx, y + 52);
 
   const a = 0.55 + Math.sin(t * 3.2) * 0.4;
   ctx.globalAlpha = a;
@@ -1954,7 +2002,8 @@ function render() {
  *  state transitions
  * ================================================================== */
 function resetRun() {
-  runScroll = 0; playT = 0; coinCount = 0; bonus = 0; hearts = 3;
+  runScroll = 0; playT = 0; coinCount = 0; bonus = 0; hearts = MAX_HP;
+  combo = 0; comboT = 0; maxJumpY = 0;
   inv = 0; dipT = 0; slipT = 0; redFlash = 0; dieT = 0;
   obstacles = []; coinsA = []; debris = []; floaters = [];
   nextAt = scroll + W * 1.6; lastWx = scroll; spawnInit = true;
@@ -2090,7 +2139,7 @@ window.__scene = {
   get state() {
     return {
       W, H, R, riderX, groundY, roadTop, roadBottom, horizonY, t,
-      mode, hearts, score: finalScore(), coins: coinCount, best,
+      mode, hearts, score: finalScore(), coins: coinCount, best, bonus, combo,
       airborne, jumpY, wheelAng, crankAng, neckA, boxA, sqA, tiltA, cq, inv,
       obstacles: obstacles.length, coinsA: coinsA.length, scroll
     };
@@ -2102,7 +2151,8 @@ window.__scene = {
     neckA = neckV = boxA = boxV = sqA = sqV = tiltA = tiltV = cq = cqV = 0;
     shake = 0; boxTimer = 2.4;
     obstacles = []; coinsA = []; debris = []; floaters = []; dust = []; dustTimer = 0;
-    runScroll = 0; playT = 0; coinCount = 0; bonus = 0; hearts = 3;
+    runScroll = 0; playT = 0; coinCount = 0; bonus = 0; hearts = MAX_HP;
+    combo = 0; comboT = 0; maxJumpY = 0;
     inv = 0; dipT = 0; slipT = 0; redFlash = 0; dieT = 0; lastMile = 0;
     spawnInit = false; mode = 'title';
     leftKey = rightKey = jumpKey = crouchKey = false;
@@ -2146,7 +2196,8 @@ window.__scene = {
     neckA = neckV = boxA = boxV = sqA = sqV = tiltA = tiltV = cq = cqV = 0;
     shake = 0; boxTimer = 2.4;
     obstacles = []; coinsA = []; debris = []; floaters = []; dust = []; dustTimer = 0;
-    runScroll = 0; playT = 0; coinCount = 0; bonus = 0; hearts = 3;
+    runScroll = 0; playT = 0; coinCount = 0; bonus = 0; hearts = MAX_HP;
+    combo = 0; comboT = 0; maxJumpY = 0;
     inv = 0; dipT = 0; slipT = 0; redFlash = 0; dieT = 0; lastMile = 0;
     spawnInit = false; mode = 'title';
     leftKey = rightKey = jumpKey = crouchKey = false;
