@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta name="description" content="当场玩：吞噬进化、雷霆战机、湖边垂钓、鸵鸟外卖。单页小游戏目录，不用账号，点开即玩。" />
+  <meta name="description" content="当场玩：吞噬进化、雷霆战机、湖边垂钓、鹈鹕骑单车。单页小游戏目录，不用账号，点开即玩。" />
   <title>当场玩 · 四款单页游戏</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -314,14 +314,14 @@ a { color: inherit; }
     54px -40px 0 -22px var(--color-ink);
 }
 
-/* CSS art — ostrich */
-.art--ostrich { background: var(--art-ostrich-sky); }
+/* CSS art — pelican */
+.art--ostrich { background: linear-gradient(var(--art-ostrich-sky), var(--art-ostrich-road) 68%); }
 .art--ostrich::before {
   content: "";
   position: absolute;
-  right: 14%;
-  top: 16%;
-  width: 28%;
+  right: 12%;
+  top: 14%;
+  width: 26%;
   aspect-ratio: 1;
   border-radius: 50%;
   background: var(--art-ostrich-sun);
@@ -329,12 +329,16 @@ a { color: inherit; }
 .art--ostrich::after {
   content: "";
   position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  height: 28%;
-  background: var(--art-ostrich-road);
-  box-shadow: 38% -18% 0 0 var(--art-ostrich-body);
+  left: 16%;
+  bottom: 20%;
+  width: 62%;
+  height: 32%;
+  background:
+    radial-gradient(circle 11px at 16% 88%, transparent 10px, var(--art-ostrich-wheel) 11px, var(--art-ostrich-wheel) 13px, transparent 14px),
+    radial-gradient(circle 11px at 78% 88%, transparent 10px, var(--art-ostrich-wheel) 11px, var(--art-ostrich-wheel) 13px, transparent 14px),
+    radial-gradient(ellipse 44% 40% at 36% 40%, var(--art-ostrich-body) 99%, transparent),
+    radial-gradient(circle 9px at 62% 16%, var(--art-ostrich-body) 99%, transparent),
+    radial-gradient(ellipse 24% 11% at 84% 22%, var(--art-ostrich-beak) 99%, transparent);
 }
 
 /* CSS art — devour */
@@ -517,7 +521,7 @@ body.is-playing { overflow: hidden; }
       <header class="mast glass">
         <p class="mast__count">四款在架 · 2026</p>
         <h1>单页小游戏，点开就进。</h1>
-        <p>没有账号，没有大厅排队。吞噬进化、雷霆战机、湖边垂钓、鸵鸟外卖都是独立网页，浏览器打开就能玩。</p>
+        <p>没有账号，没有大厅排队。吞噬进化、雷霆战机、湖边垂钓、鹈鹕骑单车都是独立网页，浏览器打开就能玩。</p>
       </header>
     </div>
 
@@ -544,13 +548,13 @@ body.is-playing { overflow: hidden; }
         <span class="game__play">开玩 →</span>
       </a>
 
-      <a class="game glass" href="ostrich-delivery.html" data-play data-title="鸵鸟外卖">
+      <a class="game glass" href="ostrich-delivery.html" data-play data-title="鹈鹕骑单车">
         <div class="game__media" aria-hidden="true">
           <span class="game__art art--ostrich"></span>
         </div>
         <div class="game__meta">
-          <h2>鸵鸟外卖</h2>
-          <p>方向键骑车送外卖：跳跃、下蹲躲路障，收小费攒连击。十格血，擦边闪避还有奖励。</p>
+          <h2>鹈鹕骑单车</h2>
+          <p>实时 3D 海岸骑行：踩踏、变道抓鱼、跳跃特技，黄昏到星空全程程序生成。</p>
         </div>
         <span class="game__play">开玩 →</span>
       </a>
