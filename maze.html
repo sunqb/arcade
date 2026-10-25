@@ -1,0 +1,1498 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="theme-color" content="#342a22">
+<title>五亿迷宫 · 纸上逃生</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body {
+    width: 100%; height: 100%; overflow: hidden;
+    background: #342a22;
+    -webkit-tap-highlight-color: transparent;
+    -webkit-user-select: none; user-select: none;
+    touch-action: none; overscroll-behavior: none;
+  }
+  canvas { display: block; width: 100vw; height: 100vh; cursor: default; }
+  .sr-only {
+    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+    overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+  }
+</style>
+</head>
+<body>
+<canvas id="game" role="img" aria-label="五亿迷宫：五页手绘迷宫，三格血，寻找数字钥匙开门，用一次性武器打败怪物并随机拾取掉落武器，最终取得五亿元。"></canvas>
+<p class="sr-only">方向键或 WASD 移动，空格使用武器，P 暂停，R 重开本页，M 切换音乐与音效。触屏可使用方向和武器按钮。</p>
+<noscript>需要启用 JavaScript 才能进入五亿迷宫。</noscript>
+<script>
+/* ==========================================================================
+   五亿迷宫 · 纸上逃生
+   单文件 Canvas 迷宫游戏 — 固定地图、无外部依赖、无持久化存储
+   ========================================================================== */
+(function () {
+'use strict';
+
+/* ------------------------------ 常量与工具 ------------------------------ */
+const W = 480, H = 800;
+const COLS = 17, ROWS = 21, CELL = 24;
+const MX = 36, MY = 126, MW = COLS * CELL, MH = ROWS * CELL;
+const MAX_HP = 3, PLAYER_SPEED = 104, STEP = 1 / 60;
+const TAU = Math.PI * 2;
+const FONT = '"Kaiti SC","STKaiti","KaiTi","PingFang SC","Microsoft YaHei",sans-serif';
+const UI_FONT = '"PingFang SC","Microsoft YaHei",sans-serif';
+const INK = '#594231', RED = '#b9443d', GREEN = '#527b55', GOLD = '#a77427';
+const TOUCH = (window.matchMedia && window.matchMedia('(pointer: coarse)').matches) || navigator.maxTouchPoints > 0;
+
+const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
+const lerp = (a, b, t) => a + (b - a) * t;
+const idx = (x, y) => y * COLS + x;
+const inBounds = (x, y) => x >= 0 && y >= 0 && x < COLS && y < ROWS;
+const cellName = c => c.x + ',' + c.y;
+const sameCell = (a, b) => a.x === b.x && a.y === b.y;
+const cellCenter = c => ({ x: MX + (c.x + 0.5) * CELL, y: MY + (c.y + 0.5) * CELL });
+const distance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+const pointInRect = (p, r) => p.x >= r.x && p.x <= r.x + r.w && p.y >= r.y && p.y <= r.y + r.h;
+
+function mulberry32(seed) {
+  return function () {
+    let t = seed += 0x6D2B79F5;
+    t = Math.imul(t ^ t >>> 15, t | 1);
+    t ^= t + Math.imul(t ^ t >>> 7, t | 61);
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+
+function shuffled(array, rng) {
+  for (let i = array.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    [array[i], array[j]] = [array[j], array[i]];
+  }
+  return array;
+}
+
+/* ------------------------------ 画布与视口 ------------------------------ */
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d', { alpha: false });
+const view = { s: 1, ox: 0, oy: 0, dpr: 1 };
+
+function resize() {
+  const cw = Math.max(1, window.innerWidth), ch = Math.max(1, window.innerHeight);
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  canvas.width = Math.floor(cw * dpr);
+  canvas.height = Math.floor(ch * dpr);
+  canvas.style.width = cw + 'px';
+  canvas.style.height = ch + 'px';
+  view.s = Math.min(cw / W, ch / H) * dpr;
+  view.ox = (canvas.width - W * view.s) / 2;
+  view.oy = (canvas.height - H * view.s) / 2;
+  view.dpr = dpr;
+}
+
+function toWorld(clientX, clientY) {
+  const r = canvas.getBoundingClientRect();
+  return {
+    x: ((clientX - r.left) * view.dpr - view.ox) / view.s,
+    y: ((clientY - r.top) * view.dpr - view.oy) / view.s
+  };
+}
+
+/* ------------------------------ 迷宫生成与寻路 ------------------------------ */
+function wallKey(a, b) {
+  if (a.x !== b.x) return 'V:' + Math.min(a.x, b.x) + ',' + a.y;
+  return 'H:' + a.x + ',' + Math.min(a.y, b.y);
+}
+
+function generateMaze(seed) {
+  const rng = mulberry32(seed);
+  const vWalls = new Set(), hWalls = new Set();
+  for (let y = 0; y < ROWS; y++) {
+    for (let x = 0; x < COLS - 1; x++) vWalls.add('V:' + x + ',' + y);
+  }
+  for (let y = 0; y < ROWS - 1; y++) {
+    for (let x = 0; x < COLS; x++) hWalls.add('H:' + x + ',' + y);
+  }
+
+  const visited = new Set(['0,0']);
+  const stack = [{ x: 0, y: 0 }];
+  const maze = { vWalls, hWalls };
+  while (stack.length) {
+    const cur = stack[stack.length - 1];
+    const options = shuffled([
+      { x: cur.x + 1, y: cur.y }, { x: cur.x - 1, y: cur.y },
+      { x: cur.x, y: cur.y + 1 }, { x: cur.x, y: cur.y - 1 }
+    ], rng).filter(c => inBounds(c.x, c.y) && !visited.has(cellName(c)));
+    if (!options.length) { stack.pop(); continue; }
+    const next = options[0];
+    const key = wallKey(cur, next);
+    vWalls.delete(key); hWalls.delete(key);
+    visited.add(cellName(next));
+    stack.push(next);
+  }
+  return maze;
+}
+
+function neighborCells(c, maze, doors) {
+  const result = [];
+  const candidates = [
+    { x: c.x + 1, y: c.y }, { x: c.x - 1, y: c.y },
+    { x: c.x, y: c.y + 1 }, { x: c.x, y: c.y - 1 }
+  ];
+  for (const n of candidates) {
+    if (!inBounds(n.x, n.y)) continue;
+    const key = wallKey(c, n);
+    if (maze.vWalls.has(key) || maze.hWalls.has(key)) continue;
+    const door = doors && doors.get(key);
+    if (door && !door.open) continue;
+    result.push(n);
+  }
+  return result;
+}
+
+function findPath(maze, start, goal, doors) {
+  const total = COLS * ROWS;
+  const previous = new Int32Array(total);
+  previous.fill(-1);
+  const queue = new Int32Array(total);
+  let head = 0, tail = 0;
+  const startI = idx(start.x, start.y), goalI = idx(goal.x, goal.y);
+  queue[tail++] = startI;
+  previous[startI] = startI;
+  while (head < tail) {
+    const curI = queue[head++];
+    if (curI === goalI) break;
+    const cur = { x: curI % COLS, y: Math.floor(curI / COLS) };
+    for (const n of neighborCells(cur, maze, doors)) {
+      const ni = idx(n.x, n.y);
+      if (previous[ni] !== -1) continue;
+      previous[ni] = curI;
+      queue[tail++] = ni;
+    }
+  }
+  if (previous[goalI] === -1) return null;
+  const path = [];
+  let cur = goalI;
+  while (cur !== startI) {
+    path.push({ x: cur % COLS, y: Math.floor(cur / COLS) });
+    cur = previous[cur];
+  }
+  path.push({ x: start.x, y: start.y });
+  return path.reverse();
+}
+
+function distanceMap(maze, start) {
+  const dist = new Int32Array(COLS * ROWS);
+  dist.fill(-1);
+  const queue = [{ x: start.x, y: start.y }];
+  dist[idx(start.x, start.y)] = 0;
+  for (let head = 0; head < queue.length; head++) {
+    const cur = queue[head], nextD = dist[idx(cur.x, cur.y)] + 1;
+    for (const n of neighborCells(cur, maze, null)) {
+      const ni = idx(n.x, n.y);
+      if (dist[ni] !== -1) continue;
+      dist[ni] = nextD;
+      queue.push(n);
+    }
+  }
+  return dist;
+}
+
+const START = { x: 0, y: 0 }, GOAL = { x: COLS - 1, y: 0 };
+const WEAPON_TYPES = ['弹弓', '剑', '小锤', '纸飞机'];
+const PAGES = [
+  { seed: 500000000, big: 2, small: 5, doors: [0.56, 0.80], transpose: 0, beat: 0.27 },
+  { seed: 501000031, big: 2, small: 6, doors: [0.52, 0.79], transpose: 2, beat: 0.26 },
+  { seed: 502000062, big: 3, small: 6, doors: [0.48, 0.68, 0.86], transpose: 4, beat: 0.25 },
+  { seed: 503000093, big: 3, small: 7, doors: [0.46, 0.67, 0.85], transpose: -2, beat: 0.24 },
+  { seed: 504000124, big: 4, small: 8, doors: [0.44, 0.66, 0.85], transpose: 5, beat: 0.23 }
+];
+const PAGE_COUNT = PAGES.length;
+let level = null;
+
+function buildLevel(pageIndex) {
+  const config = PAGES[pageIndex];
+  let chosen = null;
+  for (let attempt = 0; attempt < 120; attempt++) {
+    const maze = generateMaze(config.seed + attempt * 7919);
+    const path = findPath(maze, START, GOAL, null);
+    if (!chosen || path.length > chosen.path.length) chosen = { maze, path };
+    if (path.length >= 72 && path.length <= 180) { chosen = { maze, path }; break; }
+  }
+
+  const maze = chosen.maze, path = chosen.path;
+  const pathSet = new Set(path.map(cellName));
+  const dist = distanceMap(maze, START);
+  let maxDist = 0;
+  for (const d of dist) maxDist = Math.max(maxDist, d);
+  const occupied = new Set([cellName(START), cellName(GOAL)]);
+  const rng = mulberry32(config.seed + 7);
+
+  function takeCell(cell) {
+    if (!cell || occupied.has(cellName(cell))) return null;
+    occupied.add(cellName(cell));
+    return { x: cell.x, y: cell.y };
+  }
+
+  function mainCell(fraction) {
+    const wanted = Math.round((path.length - 1) * fraction);
+    for (let offset = 0; offset < path.length; offset++) {
+      const a = path[clamp(wanted + offset, 0, path.length - 1)];
+      const b = path[clamp(wanted - offset, 0, path.length - 1)];
+      const picked = takeCell(a) || takeCell(b);
+      if (picked) return picked;
+    }
+    return null;
+  }
+
+  function branchCell(fraction) {
+    const target = maxDist * fraction;
+    let best = null, bestScore = Infinity;
+    for (let y = 0; y < ROWS; y++) {
+      for (let x = 0; x < COLS; x++) {
+        const c = { x, y }, name = cellName(c), d = dist[idx(x, y)];
+        if (pathSet.has(name) || occupied.has(name) || d < 5) continue;
+        const score = Math.abs(d - target) + rng() * 0.35;
+        if (score < bestScore) { bestScore = score; best = c; }
+      }
+    }
+    return takeCell(best);
+  }
+
+  function doorOnPath(fraction) {
+    const i = clamp(Math.round((path.length - 1) * fraction), 1, path.length - 1);
+    const a = path[i - 1], b = path[i];
+    const ac = cellCenter(a), bc = cellCenter(b);
+    return {
+      a: { x: a.x, y: a.y }, b: { x: b.x, y: b.y }, wall: wallKey(a, b),
+      x: (ac.x + bc.x) / 2, y: (ac.y + bc.y) / 2,
+      vertical: a.x !== b.x, pathIndex: i
+    };
+  }
+
+  const items = [], monsters = [], doors = config.doors.map(doorOnPath);
+  const keyIndex = Math.round((path.length - 1) * 0.20);
+  const keyCell = mainCell(0.20);
+  const addItem = (kind, cell, value, variant) => {
+    const p = cellCenter(cell);
+    items.push({ kind, value: value || 1, variant: variant || '', cell, x: p.x, y: p.y, phase: rng() * TAU });
+  };
+
+  addItem('key', keyCell, doors.length, 'key');
+  addItem('weapon', mainCell(0.08), 1, '弹弓');
+  addItem('heart', mainCell(0.32), 1, 'heart');
+  addItem('weapon', mainCell(0.42), 1, '剑');
+  addItem('heart', branchCell(0.44), 2, 'heart');
+  addItem('weapon', branchCell(0.58), 1, '小锤');
+  addItem('heart', branchCell(0.82), 1, 'heart');
+  addItem('weapon', mainCell(0.69), 1, '纸飞机');
+  if (config.big >= 3) addItem('weapon', mainCell(0.54), 1, '剑');
+  if (config.big >= 4) addItem('heart', branchCell(0.30), 1, 'heart');
+
+  function addMonster(kind, cell, order) {
+    const p = cellCenter(cell);
+    monsters.push({
+      kind, cell, x: p.x, y: p.y, homeX: p.x, homeY: p.y,
+      r: kind === 'big' ? 8.2 : 7.2, phase: rng() * TAU,
+      speed: 47 + order * 2, cooldown: 0.5 + rng(), windup: 0,
+      aimX: 0, aimY: 1, repath: rng() * 0.25, path: [], stun: 0
+    });
+  }
+  const bigSpots = [
+    { f: 0.62 }, { f: 0.91 }, { f: 0.76, branch: true }, { f: 0.84 }
+  ];
+  const smallSpots = [
+    { f: 0.28 }, { f: 0.48 }, { f: 0.72 }, { f: 0.64, branch: true },
+    { f: 0.92, branch: true }, { f: 0.36 }, { f: 0.38, branch: true }, { f: 0.84 }
+  ];
+  for (let i = 0; i < config.big; i++) {
+    const spot = bigSpots[i];
+    addMonster('big', spot.branch ? branchCell(spot.f) : mainCell(spot.f), i);
+  }
+  for (let i = 0; i < config.small; i++) {
+    const spot = smallSpots[i];
+    addMonster('small', spot.branch ? branchCell(spot.f) : mainCell(spot.f), i);
+  }
+
+  level = {
+    maze, path, items, monsters, doors, config, page: pageIndex,
+    report: {
+      connected: Array.from(dist).every(d => d >= 0),
+      mainPathLength: path.length,
+      keyPathIndex: keyIndex,
+      doorPathIndices: doors.map(d => d.pathIndex),
+      keyBeforeDoors: doors.every(d => keyIndex < d.pathIndex),
+      keyUses: doors.length,
+      bigMonsters: config.big,
+      smallMonsters: config.small,
+      totalCells: COLS * ROWS
+    }
+  };
+  if (!level.report.connected || !level.report.keyBeforeDoors) {
+    throw new Error('迷宫关卡校验失败');
+  }
+}
+
+/* ------------------------------ 全局状态 ------------------------------ */
+const game = {
+  state: 'title', clock: 0, stateT: 0, elapsed: 0, totalElapsed: 0,
+  page: 0, kills: 0, muted: false, redFlash: 0, shake: 0,
+  message: '', messageT: 0, doorHintCd: 0, winTime: 0
+};
+let player = null, doors = new Map(), items = [], monsters = [], projectiles = [];
+const particles = [], floaters = [], keys = new Set(), touchControls = new Map();
+let debugDir = null;
+
+function resetRun() {
+  doors = new Map();
+  for (const d of level.doors) doors.set(d.wall, Object.assign({}, d, { open: false, glow: 0 }));
+  items = level.items.map(item => Object.assign({}, item, { taken: false }));
+  monsters = level.monsters.map(monster => Object.assign({}, monster, {
+    alive: true, path: [], windup: 0, cooldown: 0.45 + monster.phase * 0.12,
+    stun: 0, x: monster.homeX, y: monster.homeY
+  }));
+  const start = cellCenter(START);
+  player = {
+    x: start.x, y: start.y, r: 5.8, hp: MAX_HP, keys: 0,
+    weapons: 0, weaponNames: [], invuln: 0, facing: 1, walk: 0, moving: false
+  };
+  projectiles = [];
+  particles.length = 0; floaters.length = 0;
+  keys.clear(); touchControls.clear(); debugDir = null;
+  game.elapsed = 0; game.kills = 0; game.redFlash = 0; game.shake = 0;
+  game.message = ''; game.messageT = 0; game.doorHintCd = 0; game.winTime = 0;
+  music.nextTime = 0; music.step = 0;
+}
+
+function setState(state) {
+  game.state = state;
+  game.stateT = 0;
+}
+
+function startGame() {
+  ensureAudio();
+  game.page = 0;
+  game.totalElapsed = 0;
+  buildLevel(0);
+  resetRun();
+  buildStaticLayer();
+  setState('playing');
+  toast('第 1 / ' + PAGE_COUNT + ' 页：先找钥匙，再去出口！', 2.5);
+  sfxStart();
+}
+
+function retryPage() {
+  ensureAudio();
+  resetRun();
+  setState('playing');
+  toast('重新开始第 ' + (game.page + 1) + ' 页', 1.8);
+  sfxStart();
+}
+
+function nextPage() {
+  if (game.page >= PAGE_COUNT - 1) { startGame(); return; }
+  ensureAudio();
+  game.page++;
+  buildLevel(game.page);
+  resetRun();
+  buildStaticLayer();
+  setState('playing');
+  toast('第 ' + (game.page + 1) + ' / ' + PAGE_COUNT + ' 页：生命与补给已刷新', 2.6);
+  sfxStart();
+}
+
+function handleEndAction() {
+  if (game.state === 'over') retryPage();
+  else if (game.state === 'win') nextPage();
+}
+
+function togglePause() {
+  if (game.state === 'playing') setState('paused');
+  else if (game.state === 'paused') setState('playing');
+  keys.clear(); touchControls.clear(); debugDir = null;
+}
+
+/* ------------------------------ 音效 ------------------------------ */
+let AC = null, master = null, musicGain = null;
+const music = { nextTime: 0, step: 0 };
+const MELODY = [72, 0, 76, 79, 76, 74, 71, 0, 67, 0, 71, 74, 79, 76, 74, 0];
+const BASS = [48, 45, 43, 48];
+function ensureAudio() {
+  if (AC) { if (AC.state === 'suspended') AC.resume(); return; }
+  const AudioCtor = window.AudioContext || window.webkitAudioContext;
+  if (!AudioCtor) return;
+  AC = new AudioCtor();
+  master = AC.createGain();
+  master.gain.value = game.muted ? 0 : 0.34;
+  master.connect(AC.destination);
+  musicGain = AC.createGain();
+  musicGain.gain.value = 0.24;
+  musicGain.connect(master);
+  music.nextTime = 0;
+}
+
+function toggleMute() {
+  game.muted = !game.muted;
+  if (AC && master) master.gain.setTargetAtTime(game.muted ? 0 : 0.34, AC.currentTime, 0.02);
+  music.nextTime = 0;
+}
+
+function musicNote(note, at, duration, type, volume) {
+  if (!AC || !musicGain) return;
+  const osc = AC.createOscillator(), gain = AC.createGain();
+  osc.type = type;
+  osc.frequency.setValueAtTime(440 * Math.pow(2, (note - 69 + level.config.transpose) / 12), at);
+  gain.gain.setValueAtTime(0.0001, at);
+  gain.gain.exponentialRampToValueAtTime(volume, at + 0.018);
+  gain.gain.exponentialRampToValueAtTime(0.0001, at + duration);
+  osc.connect(gain); gain.connect(musicGain);
+  osc.start(at); osc.stop(at + duration + 0.03);
+}
+
+function updateMusic() {
+  if (!AC || !musicGain || AC.state !== 'running' || game.muted || game.state !== 'playing') {
+    music.nextTime = 0;
+    return;
+  }
+  const now = AC.currentTime;
+  if (!music.nextTime || music.nextTime < now - 0.1) music.nextTime = now + 0.04;
+  const beat = level.config.beat;
+  while (music.nextTime < now + 0.16) {
+    const step = music.step % MELODY.length;
+    const note = MELODY[step];
+    if (note) musicNote(note, music.nextTime, beat * 0.74, 'triangle', 0.13);
+    if (step % 4 === 0) musicNote(BASS[step / 4], music.nextTime, beat * 1.8, 'sine', 0.16);
+    music.nextTime += beat;
+    music.step++;
+  }
+}
+
+function tone(f0, f1, duration, type, volume, delay) {
+  if (!AC || game.muted) return;
+  const at = AC.currentTime + (delay || 0);
+  const osc = AC.createOscillator(), gain = AC.createGain();
+  osc.type = type || 'sine';
+  osc.frequency.setValueAtTime(Math.max(1, f0), at);
+  osc.frequency.exponentialRampToValueAtTime(Math.max(1, f1), at + duration);
+  gain.gain.setValueAtTime(volume || 0.16, at);
+  gain.gain.exponentialRampToValueAtTime(0.0001, at + duration);
+  osc.connect(gain); gain.connect(master);
+  osc.start(at); osc.stop(at + duration + 0.03);
+}
+
+function sfxStart() { tone(392, 523, 0.12, 'triangle', 0.16); tone(523, 659, 0.15, 'triangle', 0.14, 0.09); }
+function sfxPickup() { tone(660, 990, 0.12, 'sine', 0.18); }
+function sfxKey() { tone(740, 1120, 0.16, 'triangle', 0.18); tone(1120, 1480, 0.12, 'triangle', 0.10, 0.08); }
+function sfxDoor() { tone(180, 360, 0.20, 'square', 0.09); tone(520, 760, 0.18, 'triangle', 0.12, 0.13); }
+function sfxAttack() { tone(430, 90, 0.13, 'sawtooth', 0.15); }
+function sfxHurt() { tone(180, 55, 0.28, 'sawtooth', 0.20); }
+function sfxShoot() { tone(190, 110, 0.08, 'square', 0.05); }
+function sfxWin() { [523, 659, 784, 1047, 1319].forEach((f, i) => tone(f, f, 0.20, 'triangle', 0.18, i * 0.11)); }
+
+/* ------------------------------ 墙体与圆形碰撞 ------------------------------ */
+function circleSegment(px, py, radius, x1, y1, x2, y2) {
+  const dx = x2 - x1, dy = y2 - y1;
+  const length2 = dx * dx + dy * dy;
+  const t = length2 ? clamp(((px - x1) * dx + (py - y1) * dy) / length2, 0, 1) : 0;
+  const nx = x1 + dx * t, ny = y1 + dy * t;
+  const ex = px - nx, ey = py - ny;
+  return ex * ex + ey * ey < radius * radius;
+}
+
+function circleHitsStatic(x, y, radius) {
+  const r = radius + 0.85;
+  if (x - r < MX || x + r > MX + MW || y - r < MY || y + r > MY + MH) return true;
+  const minX = Math.floor((x - r - MX) / CELL) - 1;
+  const maxX = Math.floor((x + r - MX) / CELL) + 1;
+  const minY = Math.floor((y - r - MY) / CELL) - 1;
+  const maxY = Math.floor((y + r - MY) / CELL) + 1;
+  for (let cy = minY; cy <= maxY; cy++) {
+    for (let cx = minX; cx <= maxX; cx++) {
+      const vk = 'V:' + cx + ',' + cy;
+      if (level.maze.vWalls.has(vk)) {
+        const wx = MX + (cx + 1) * CELL, wy = MY + cy * CELL;
+        if (circleSegment(x, y, r, wx, wy, wx, wy + CELL)) return true;
+      }
+      const hk = 'H:' + cx + ',' + cy;
+      if (level.maze.hWalls.has(hk)) {
+        const wx = MX + cx * CELL, wy = MY + (cy + 1) * CELL;
+        if (circleSegment(x, y, r, wx, wy, wx + CELL, wy)) return true;
+      }
+    }
+  }
+  return false;
+}
+
+function doorSegment(d) {
+  if (d.vertical) return { x1: d.x, y1: d.y - CELL / 2, x2: d.x, y2: d.y + CELL / 2 };
+  return { x1: d.x - CELL / 2, y1: d.y, x2: d.x + CELL / 2, y2: d.y };
+}
+
+function collidingDoor(x, y, radius) {
+  for (const d of doors.values()) {
+    if (d.open) continue;
+    const s = doorSegment(d);
+    if (circleSegment(x, y, radius + 1.5, s.x1, s.y1, s.x2, s.y2)) return d;
+  }
+  return null;
+}
+
+function collides(x, y, radius) {
+  return circleHitsStatic(x, y, radius) || !!collidingDoor(x, y, radius);
+}
+
+function lineOfSight(a, b) {
+  const dx = b.x - a.x, dy = b.y - a.y, length = Math.hypot(dx, dy);
+  const steps = Math.max(1, Math.ceil(length / 4));
+  for (let i = 1; i < steps; i++) {
+    const t = i / steps;
+    if (collides(a.x + dx * t, a.y + dy * t, 0.5)) return false;
+  }
+  return true;
+}
+
+function moveBody(body, dx, dy, radius, isPlayer) {
+  function attempt(nx, ny) {
+    const door = collidingDoor(nx, ny, radius);
+    if (!circleHitsStatic(nx, ny, radius) && !door) {
+      body.x = nx; body.y = ny;
+      return true;
+    }
+    if (isPlayer && door) {
+      if (player.keys > 0) {
+        openDoor(door);
+        if (!circleHitsStatic(nx, ny, radius)) {
+          body.x = nx; body.y = ny;
+          return true;
+        }
+      } else if (game.doorHintCd <= 0) {
+        toast('锁住了：先找一把钥匙！', 1.6);
+        game.doorHintCd = 1.2;
+      }
+    }
+    return false;
+  }
+  if (dx) attempt(body.x + dx, body.y);
+  if (dy) attempt(body.x, body.y + dy);
+}
+
+function cellAt(x, y) {
+  return {
+    x: clamp(Math.floor((x - MX) / CELL), 0, COLS - 1),
+    y: clamp(Math.floor((y - MY) / CELL), 0, ROWS - 1)
+  };
+}
+
+/* ------------------------------ 道具、战斗与伤害 ------------------------------ */
+function toast(text, duration) {
+  game.message = text;
+  game.messageT = duration || 1.7;
+}
+
+function addFloater(x, y, text, color) {
+  floaters.push({ x, y, text, color: color || INK, life: 1.1, max: 1.1 });
+}
+
+function burst(x, y, color, count, speed) {
+  const rng = mulberry32(Math.floor((x * 17 + y * 31 + game.clock * 1000) * 10));
+  for (let i = 0; i < count; i++) {
+    const angle = rng() * TAU, velocity = (0.3 + rng() * 0.7) * (speed || 70);
+    particles.push({
+      x, y, vx: Math.cos(angle) * velocity, vy: Math.sin(angle) * velocity,
+      color, size: 1.2 + rng() * 2.4, life: 0.45 + rng() * 0.55, max: 1
+    });
+  }
+}
+
+function openDoor(door) {
+  if (door.open || player.keys <= 0) return;
+  player.keys--;
+  door.open = true;
+  door.glow = 1;
+  toast('咔嗒！门锁打开了', 1.5);
+  addFloater(door.x, door.y - 10, '开锁 −1', GOLD);
+  burst(door.x, door.y, GOLD, 14, 52);
+  sfxDoor();
+}
+
+function collectItems() {
+  for (const item of items) {
+    if (item.taken || Math.hypot(player.x - item.x, player.y - item.y) > player.r + 9) continue;
+    if (item.kind === 'heart') {
+      if (player.hp >= MAX_HP) continue;
+      const healed = Math.min(item.value, MAX_HP - player.hp);
+      player.hp += healed;
+      item.taken = true;
+      addFloater(item.x, item.y - 8, '+' + healed + ' 格血', RED);
+      burst(item.x, item.y, RED, 12, 48);
+      sfxPickup();
+    } else if (item.kind === 'key') {
+      player.keys += item.value;
+      item.taken = true;
+      addFloater(item.x, item.y - 8, '钥匙 +' + item.value, GOLD);
+      toast('这把钥匙可以开 ' + item.value + ' 次锁', 2);
+      burst(item.x, item.y, GOLD, 14, 55);
+      sfxKey();
+    } else {
+      player.weapons++;
+      player.weaponNames.push(item.variant);
+      item.taken = true;
+      addFloater(item.x, item.y - 8, item.variant + ' +1', INK);
+      toast('拿到' + item.variant + '：靠近怪物后使用', 1.8);
+      burst(item.x, item.y, GREEN, 12, 50);
+      sfxPickup();
+    }
+  }
+}
+
+function maybeDropWeapon(monster) {
+  const chance = monster.kind === 'big' ? 0.65 : 0.40;
+  if (Math.random() >= chance) return;
+  const variant = WEAPON_TYPES[Math.floor(Math.random() * WEAPON_TYPES.length)];
+  items.push({
+    kind: 'weapon', value: 1, variant, cell: cellAt(monster.x, monster.y),
+    x: monster.x, y: monster.y, phase: Math.random() * TAU, taken: false, dropped: true
+  });
+  toast('怪物掉落了' + variant + '！', 1.8);
+  addFloater(monster.x, monster.y - 26, '掉落 ' + variant, GREEN);
+  burst(monster.x, monster.y, GREEN, 12, 58);
+}
+
+function useWeapon() {
+  if (game.state !== 'playing') return;
+  if (player.weapons <= 0) { toast('武器用完了，去支路找找！', 1.4); return; }
+  let target = null, nearest = Infinity;
+  for (const monster of monsters) {
+    if (!monster.alive) continue;
+    const d = distance(player, monster);
+    if (d <= CELL * 2.8 && d < nearest && lineOfSight(player, monster)) {
+      nearest = d; target = monster;
+    }
+  }
+  if (!target) { toast('附近没有能打到的怪物', 1.3); return; }
+  const name = player.weaponNames.shift() || '武器';
+  player.weapons--;
+  target.alive = false;
+  game.kills++;
+  maybeDropWeapon(target);
+  addFloater(target.x, target.y - 12, name + '：啪！', RED);
+  burst(target.x, target.y, INK, 24, 95);
+  particles.push({
+    x: player.x, y: player.y, tx: target.x, ty: target.y,
+    line: true, color: RED, life: 0.18, max: 0.18, size: 2
+  });
+  game.shake = 0.25;
+  sfxAttack();
+}
+
+function hurtPlayer(reason) {
+  if (game.state !== 'playing' || player.invuln > 0) return false;
+  player.hp = Math.max(0, player.hp - 1);
+  player.invuln = 1.15;
+  game.redFlash = 0.72;
+  game.shake = 0.55;
+  addFloater(player.x, player.y - 14, '−1 格血', RED);
+  burst(player.x, player.y, RED, 16, 80);
+  sfxHurt();
+  if (player.hp <= 0) {
+    toast(reason || '闯关失败', 2);
+    setState('over');
+  } else {
+    toast(reason + '，还剩 ' + player.hp + ' 格血', 1.4);
+  }
+  return true;
+}
+
+function winGame() {
+  if (game.state !== 'playing') return;
+  game.winTime = game.elapsed;
+  setState('win');
+  burst(player.x, player.y, RED, 36, 120);
+  burst(player.x, player.y, GOLD, 36, 105);
+  sfxWin();
+}
+
+/* ------------------------------ 输入与玩家更新 ------------------------------ */
+const DPAD = [
+  { action: 'up', x: 92, y: 681, r: 23 },
+  { action: 'left', x: 52, y: 721, r: 23 },
+  { action: 'right', x: 132, y: 721, r: 23 },
+  { action: 'down', x: 92, y: 761, r: 23 }
+];
+const WEAPON_BUTTON = { x: 389, y: 724, r: 39 };
+const PAUSE_BUTTON = { x: 402, y: 46, r: 17 };
+const MUTE_BUTTON = { x: 445, y: 46, r: 17 };
+const BOTTOM_RESTART = { x: 212, y: 741, w: 66, h: 29 };
+const START_BUTTON = { x: 120, y: 510, w: 240, h: 50 };
+const RESUME_BUTTON = { x: 125, y: 390, w: 230, h: 48 };
+const PAUSE_RESTART_BUTTON = { x: 160, y: 458, w: 160, h: 40 };
+const END_RESTART_BUTTON = { x: 120, y: 470, w: 240, h: 50 };
+
+function readDirection() {
+  if (debugDir) return debugDir;
+  let x = 0, y = 0;
+  if (keys.has('ArrowLeft') || keys.has('KeyA')) x--;
+  if (keys.has('ArrowRight') || keys.has('KeyD')) x++;
+  if (keys.has('ArrowUp') || keys.has('KeyW')) y--;
+  if (keys.has('ArrowDown') || keys.has('KeyS')) y++;
+  for (const action of touchControls.values()) {
+    if (action === 'left') x--;
+    else if (action === 'right') x++;
+    else if (action === 'up') y--;
+    else if (action === 'down') y++;
+  }
+  if (x && y) { const scale = Math.SQRT1_2; x *= scale; y *= scale; }
+  return { x, y };
+}
+
+function updatePlayer(dt) {
+  const dir = readDirection();
+  player.moving = !!(dir.x || dir.y);
+  if (dir.x) player.facing = dir.x > 0 ? 1 : -1;
+  if (player.moving) {
+    player.walk += dt * 11;
+    moveBody(player, dir.x * PLAYER_SPEED * dt, dir.y * PLAYER_SPEED * dt, player.r, true);
+  }
+  player.invuln = Math.max(0, player.invuln - dt);
+  collectItems();
+  if (sameCell(cellAt(player.x, player.y), GOAL) && distance(player, cellCenter(GOAL)) < CELL * 0.52) winGame();
+}
+
+function updateMonsters(dt) {
+  for (const monster of monsters) {
+    if (!monster.alive) continue;
+    if (monster.stun > 0) { monster.stun -= dt; continue; }
+    if (monster.kind === 'big') {
+      monster.repath -= dt;
+      if (monster.repath <= 0) {
+        const from = cellAt(monster.x, monster.y), to = cellAt(player.x, player.y);
+        monster.path = findPath(level.maze, from, to, doors) || [];
+        monster.repath = 0.32 + (monster.phase % 0.12);
+      }
+      let target = null;
+      if (monster.path.length > 1) {
+        const next = monster.path[1];
+        target = cellCenter(next);
+        if (Math.hypot(monster.x - target.x, monster.y - target.y) < 2.2) {
+          monster.path.shift();
+          target = monster.path.length > 1 ? cellCenter(monster.path[1]) : null;
+        }
+      } else if (sameCell(cellAt(monster.x, monster.y), cellAt(player.x, player.y))) {
+        target = player;
+      }
+      if (target && game.elapsed > 1.1) {
+        const dx = target.x - monster.x, dy = target.y - monster.y, d = Math.hypot(dx, dy) || 1;
+        moveBody(monster, dx / d * monster.speed * dt, dy / d * monster.speed * dt, monster.r, false);
+      }
+      if (distance(player, monster) < player.r + monster.r + 0.5) {
+        if (hurtPlayer('被大怪物抓到了')) {
+          monster.stun = 0.75;
+          const dx = player.x - monster.x, dy = player.y - monster.y, d = Math.hypot(dx, dy) || 1;
+          moveBody(player, dx / d * 11, dy / d * 11, player.r, true);
+        }
+      }
+    } else {
+      monster.cooldown = Math.max(0, monster.cooldown - dt);
+      const d = distance(player, monster);
+      if (monster.windup > 0) {
+        monster.windup -= dt;
+        const dx = player.x - monster.x, dy = player.y - monster.y, len = Math.hypot(dx, dy) || 1;
+        monster.aimX = dx / len; monster.aimY = dy / len;
+        if (monster.windup <= 0) {
+          projectiles.push({
+            x: monster.x + monster.aimX * 9, y: monster.y + monster.aimY * 9,
+            vx: monster.aimX * 91, vy: monster.aimY * 91, r: 2.8, life: 1.45
+          });
+          monster.cooldown = 1.65;
+          sfxShoot();
+        }
+      } else if (monster.cooldown <= 0 && d < CELL * 3.3 && lineOfSight(monster, player)) {
+        monster.windup = 0.48;
+      }
+    }
+  }
+}
+
+function updateProjectiles(dt) {
+  for (let i = projectiles.length - 1; i >= 0; i--) {
+    const p = projectiles[i];
+    p.life -= dt;
+    p.x += p.vx * dt; p.y += p.vy * dt;
+    if (p.life <= 0 || collides(p.x, p.y, p.r)) {
+      burst(p.x, p.y, INK, 4, 22);
+      projectiles.splice(i, 1);
+      continue;
+    }
+    if (distance(p, player) < p.r + player.r) {
+      hurtPlayer('被小怪的墨滴打中了');
+      projectiles.splice(i, 1);
+    }
+  }
+}
+
+function updateEffects(dt) {
+  game.redFlash = Math.max(0, game.redFlash - dt * 1.8);
+  game.shake = Math.max(0, game.shake - dt * 2.8);
+  game.messageT = Math.max(0, game.messageT - dt);
+  game.doorHintCd = Math.max(0, game.doorHintCd - dt);
+  for (const d of doors.values()) d.glow = Math.max(0, (d.glow || 0) - dt * 1.6);
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    p.life -= dt;
+    if (p.life <= 0) { particles.splice(i, 1); continue; }
+    if (!p.line) {
+      p.x += p.vx * dt; p.y += p.vy * dt;
+      p.vx *= Math.pow(0.08, dt); p.vy *= Math.pow(0.08, dt);
+    }
+  }
+  for (let i = floaters.length - 1; i >= 0; i--) {
+    const f = floaters[i];
+    f.life -= dt; f.y -= dt * 22;
+    if (f.life <= 0) floaters.splice(i, 1);
+  }
+}
+
+function update(dt) {
+  if (game.state !== 'playing') return;
+  game.stateT += dt;
+  game.elapsed += dt;
+  game.totalElapsed += dt;
+  updatePlayer(dt);
+  if (game.state !== 'playing') { updateEffects(dt); return; }
+  updateMonsters(dt);
+  updateProjectiles(dt);
+  updateEffects(dt);
+}
+
+/* ------------------------------ 手绘基础图形 ------------------------------ */
+function sketchLine(g, x1, y1, x2, y2, color, width) {
+  const dx = x2 - x1, dy = y2 - y1, length = Math.hypot(dx, dy) || 1;
+  const nx = -dy / length, ny = dx / length;
+  const steps = Math.max(1, Math.ceil(length / 12));
+  for (let pass = 0; pass < 2; pass++) {
+    g.beginPath();
+    for (let i = 0; i <= steps; i++) {
+      const t = i / steps;
+      const wobble = Math.sin(i * 4.173 + x1 * 0.11 + y1 * 0.07 + pass * 2.3) * (pass ? 0.45 : 0.72);
+      const x = lerp(x1, x2, t) + nx * wobble;
+      const y = lerp(y1, y2, t) + ny * wobble;
+      if (i === 0) g.moveTo(x, y); else g.lineTo(x, y);
+    }
+    g.globalAlpha = pass ? 0.24 : 0.86;
+    g.strokeStyle = color || INK;
+    g.lineWidth = pass ? 0.75 : (width || 2);
+    g.lineCap = 'round'; g.lineJoin = 'round';
+    g.stroke();
+  }
+  g.globalAlpha = 1;
+}
+
+function roughRect(g, x, y, w, h, color, width) {
+  sketchLine(g, x, y, x + w, y, color, width);
+  sketchLine(g, x + w, y, x + w, y + h, color, width);
+  sketchLine(g, x + w, y + h, x, y + h, color, width);
+  sketchLine(g, x, y + h, x, y, color, width);
+}
+
+function roughCircle(g, x, y, r, color, width, phase) {
+  for (let pass = 0; pass < 2; pass++) {
+    g.beginPath();
+    for (let i = 0; i <= 24; i++) {
+      const a = i / 24 * TAU;
+      const rr = r + Math.sin(i * 5.17 + (phase || 0) + pass * 1.9) * 0.55;
+      const px = x + Math.cos(a) * rr, py = y + Math.sin(a) * rr;
+      if (i === 0) g.moveTo(px, py); else g.lineTo(px, py);
+    }
+    g.globalAlpha = pass ? 0.25 : 0.9;
+    g.strokeStyle = color || INK; g.lineWidth = pass ? 0.7 : (width || 1.8);
+    g.stroke();
+  }
+  g.globalAlpha = 1;
+}
+
+function heartPath(g, x, y, size) {
+  g.beginPath();
+  g.moveTo(x, y + size);
+  g.bezierCurveTo(x - size * 1.3, y + size * 0.1, x - size * 0.95, y - size * 0.95, x - size * 0.28, y - size * 0.62);
+  g.bezierCurveTo(x, y - size * 1.05, x + size * 0.28, y - size * 1.05, x + size * 0.28, y - size * 0.62);
+  g.bezierCurveTo(x + size * 0.95, y - size * 0.95, x + size * 1.3, y + size * 0.1, x, y + size);
+  g.closePath();
+}
+
+function drawHeart(g, x, y, size, filled, number) {
+  heartPath(g, x, y, size);
+  g.fillStyle = filled ? 'rgba(185,68,61,.20)' : 'rgba(89,66,49,.035)';
+  g.fill();
+  g.strokeStyle = filled ? RED : 'rgba(89,66,49,.35)';
+  g.lineWidth = 1.6; g.stroke();
+  if (number !== undefined) {
+    g.fillStyle = filled ? RED : INK;
+    g.font = 'bold ' + Math.max(7, size * 0.85) + 'px ' + UI_FONT;
+    g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.fillText(String(number), x, y + 0.5);
+  }
+}
+
+function drawKey(g, x, y, scale, number) {
+  g.save(); g.translate(x, y); g.scale(scale || 1, scale || 1); g.rotate(-0.35);
+  g.strokeStyle = GOLD; g.lineWidth = 2; g.lineCap = 'round';
+  g.beginPath(); g.arc(-5, -3, 4, 0, TAU); g.moveTo(-2, 0); g.lineTo(7, 8);
+  g.moveTo(3, 4); g.lineTo(6, 1); g.moveTo(6, 7); g.lineTo(9, 4); g.stroke();
+  g.restore();
+  if (number !== undefined) {
+    g.fillStyle = GOLD; g.font = 'bold 9px ' + UI_FONT;
+    g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(String(number), x + 6, y - 7);
+  }
+}
+
+function drawWeapon(g, x, y, variant, scale) {
+  g.save(); g.translate(x, y); g.scale(scale || 1, scale || 1);
+  g.strokeStyle = INK; g.fillStyle = 'rgba(167,116,39,.18)'; g.lineWidth = 1.8; g.lineCap = 'round'; g.lineJoin = 'round';
+  if (variant === '弹弓') {
+    g.beginPath(); g.moveTo(0, 9); g.lineTo(0, 0); g.lineTo(-6, -7); g.moveTo(0, 0); g.lineTo(6, -7);
+    g.moveTo(-6, -7); g.quadraticCurveTo(0, -3, 6, -7); g.stroke();
+  } else if (variant === '小锤') {
+    g.save(); g.rotate(-0.55); g.beginPath(); g.moveTo(0, -2); g.lineTo(0, 10); g.stroke();
+    g.fillRect(-7, -8, 14, 7); g.strokeRect(-7, -8, 14, 7); g.restore();
+  } else if (variant === '纸飞机') {
+    g.beginPath(); g.moveTo(-9, -5); g.lineTo(10, -9); g.lineTo(3, 9); g.lineTo(0, 1); g.closePath(); g.fill(); g.stroke();
+    g.beginPath(); g.moveTo(0, 1); g.lineTo(10, -9); g.stroke();
+  } else {
+    g.save(); g.rotate(-0.72);
+    g.fillStyle = 'rgba(104,124,119,.26)';
+    g.beginPath(); g.moveTo(0, -12); g.lineTo(2.7, -7); g.lineTo(1.8, 4);
+    g.lineTo(-1.8, 4); g.lineTo(-2.7, -7); g.closePath(); g.fill(); g.stroke();
+    g.beginPath(); g.moveTo(0, -9); g.lineTo(0, 3); g.stroke();
+    g.strokeStyle = GOLD; g.lineWidth = 2.2;
+    g.beginPath(); g.moveTo(-5, 4); g.lineTo(5, 4); g.stroke();
+    g.strokeStyle = INK; g.lineWidth = 2.4;
+    g.beginPath(); g.moveTo(0, 5); g.lineTo(0, 10); g.stroke();
+    g.fillStyle = GOLD; g.beginPath(); g.arc(0, 11, 1.5, 0, TAU); g.fill();
+    g.restore();
+  }
+  g.restore();
+}
+
+function drawLock(g, x, y, open) {
+  g.save(); g.translate(x, y);
+  g.strokeStyle = open ? GREEN : GOLD; g.fillStyle = open ? 'rgba(82,123,85,.14)' : 'rgba(167,116,39,.20)';
+  g.lineWidth = 1.7;
+  g.beginPath(); g.arc(0, -4, 5, Math.PI, 0, false);
+  if (open) g.lineTo(7, -9); else g.lineTo(5, 0);
+  g.stroke();
+  g.fillRect(-7, -1, 14, 12); g.strokeRect(-7, -1, 14, 12);
+  g.beginPath(); g.arc(0, 4, 1.5, 0, TAU); g.moveTo(0, 5.5); g.lineTo(0, 8); g.stroke();
+  g.restore();
+}
+
+/* ------------------------------ 静态纸张与迷宫 ------------------------------ */
+let staticLayer = null;
+function buildStaticLayer() {
+  staticLayer = document.createElement('canvas');
+  staticLayer.width = W * 2; staticLayer.height = H * 2;
+  const g = staticLayer.getContext('2d');
+  g.scale(2, 2);
+  g.fillStyle = '#f5ebcd'; g.fillRect(0, 0, W, H);
+
+  g.lineWidth = 0.55;
+  for (let x = 12; x < W; x += 24) {
+    g.strokeStyle = x === 36 ? 'rgba(165,94,72,.17)' : 'rgba(104,124,119,.11)';
+    g.beginPath(); g.moveTo(x, 0); g.lineTo(x, H); g.stroke();
+  }
+  for (let y = 6; y < H; y += 24) {
+    g.strokeStyle = 'rgba(104,124,119,.11)';
+    g.beginPath(); g.moveTo(0, y); g.lineTo(W, y); g.stroke();
+  }
+  g.strokeStyle = 'rgba(185,68,61,.16)'; g.lineWidth = 1;
+  g.beginPath(); g.moveTo(23, 0); g.lineTo(23, H); g.stroke();
+
+  const rng = mulberry32(500000012);
+  for (let i = 0; i < 150; i++) {
+    g.fillStyle = 'rgba(89,66,49,' + (0.012 + rng() * 0.025) + ')';
+    g.beginPath(); g.arc(rng() * W, rng() * H, 0.3 + rng() * 1.1, 0, TAU); g.fill();
+  }
+  roughRect(g, 12, 10, 456, 780, 'rgba(89,66,49,.55)', 1.25);
+
+  for (const key of level.maze.vWalls) {
+    const parts = key.slice(2).split(',').map(Number);
+    const x = MX + (parts[0] + 1) * CELL, y = MY + parts[1] * CELL;
+    sketchLine(g, x, y, x, y + CELL, INK, 2.05);
+  }
+  for (const key of level.maze.hWalls) {
+    const parts = key.slice(2).split(',').map(Number);
+    const x = MX + parts[0] * CELL, y = MY + (parts[1] + 1) * CELL;
+    sketchLine(g, x, y, x + CELL, y, INK, 2.05);
+  }
+  roughRect(g, MX, MY, MW, MH, INK, 2.5);
+
+  g.font = 'bold 11px ' + FONT; g.textBaseline = 'middle';
+  g.textAlign = 'left'; g.fillStyle = GREEN; g.fillText('↘ 入口', MX + 3, MY - 11);
+  g.textAlign = 'right'; g.fillStyle = RED;
+  g.fillText(game.page === PAGE_COUNT - 1 ? '出口 · 5亿元 ↙' : '第 ' + (game.page + 1) + ' 页出口 ↙', MX + MW - 2, MY - 11);
+}
+
+/* ------------------------------ 世界绘制 ------------------------------ */
+function drawDoor(g, d) {
+  const s = doorSegment(d);
+  g.save();
+  if (!d.open) {
+    sketchLine(g, s.x1, s.y1, s.x2, s.y2, GOLD, 4.2);
+    if (d.vertical) {
+      sketchLine(g, d.x - 4, d.y - 9, d.x + 4, d.y - 9, GOLD, 1.2);
+      sketchLine(g, d.x - 4, d.y + 9, d.x + 4, d.y + 9, GOLD, 1.2);
+    } else {
+      sketchLine(g, d.x - 9, d.y - 4, d.x - 9, d.y + 4, GOLD, 1.2);
+      sketchLine(g, d.x + 9, d.y - 4, d.x + 9, d.y + 4, GOLD, 1.2);
+    }
+    drawLock(g, d.x, d.y, false);
+  } else {
+    g.globalAlpha = 0.45 + (d.glow || 0) * 0.5;
+    if (d.vertical) {
+      sketchLine(g, s.x1, s.y1, s.x1, s.y1 + 7, GREEN, 2);
+      sketchLine(g, s.x2, s.y2 - 7, s.x2, s.y2, GREEN, 2);
+    } else {
+      sketchLine(g, s.x1, s.y1, s.x1 + 7, s.y1, GREEN, 2);
+      sketchLine(g, s.x2 - 7, s.y2, s.x2, s.y2, GREEN, 2);
+    }
+  }
+  g.restore();
+}
+
+function drawItem(g, item) {
+  if (item.taken) return;
+  const bob = Math.sin(game.clock * 2.4 + item.phase) * 1.2;
+  g.save(); g.translate(0, bob);
+  g.fillStyle = 'rgba(245,235,205,.80)';
+  g.beginPath(); g.arc(item.x, item.y, 10.2, 0, TAU); g.fill();
+  if (item.dropped) {
+    g.strokeStyle = GREEN; g.globalAlpha = 0.45 + Math.sin(game.clock * 5 + item.phase) * 0.2;
+    g.setLineDash([2, 3]); g.beginPath(); g.arc(item.x, item.y, 11.2, 0, TAU); g.stroke();
+    g.setLineDash([]); g.globalAlpha = 1;
+  }
+  if (item.kind === 'heart') drawHeart(g, item.x, item.y, 7.2, true, item.value);
+  else if (item.kind === 'key') drawKey(g, item.x, item.y, 0.9, item.value);
+  else drawWeapon(g, item.x, item.y, item.variant, 0.85);
+  g.restore();
+}
+
+function drawGoal(g) {
+  const p = cellCenter(GOAL);
+  const pulse = 0.5 + Math.sin(game.clock * 4) * 0.18;
+  g.save(); g.translate(p.x, p.y);
+  g.strokeStyle = 'rgba(185,68,61,' + pulse + ')'; g.lineWidth = 1.3;
+  for (let i = 0; i < 8; i++) {
+    const a = i / 8 * TAU + game.clock * 0.1;
+    g.beginPath(); g.moveTo(Math.cos(a) * 8, Math.sin(a) * 8); g.lineTo(Math.cos(a) * 11, Math.sin(a) * 11); g.stroke();
+  }
+  g.fillStyle = RED; g.font = 'bold 8px ' + UI_FONT; g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.fillText(game.page === PAGE_COUNT - 1 ? '5亿' : '出口', 0, 0);
+  g.restore();
+}
+
+function drawPlayer(g) {
+  if (player.invuln > 0 && Math.floor(player.invuln * 12) % 2 === 0) return;
+  const stride = player.moving ? Math.sin(player.walk) * 3 : 0;
+  g.save(); g.translate(player.x, player.y); g.scale(player.facing, 1);
+  g.strokeStyle = INK; g.lineWidth = 1.8; g.lineCap = 'round';
+  g.fillStyle = '#f5ebcd';
+  g.beginPath(); g.arc(0, -7, 3.5, 0, TAU); g.fill(); g.stroke();
+  g.beginPath(); g.moveTo(0, -3.5); g.lineTo(0, 4);
+  g.moveTo(0, -1); g.lineTo(-5, 2 + stride * 0.4); g.moveTo(0, -1); g.lineTo(5, 1 - stride * 0.4);
+  g.moveTo(0, 4); g.lineTo(-4, 9 + stride); g.moveTo(0, 4); g.lineTo(4, 9 - stride); g.stroke();
+  g.strokeStyle = RED; g.lineWidth = 2;
+  g.beginPath(); g.moveTo(-3, -4); g.lineTo(3, -4); g.lineTo(6, -1); g.stroke();
+  g.restore();
+}
+
+function drawMonster(g, monster) {
+  if (!monster.alive) return;
+  const wobble = Math.sin(game.clock * 3 + monster.phase);
+  g.save(); g.translate(monster.x, monster.y + wobble * 0.5);
+  if (monster.kind === 'big') {
+    g.fillStyle = 'rgba(89,66,49,.11)';
+    g.beginPath(); g.arc(0, 0, 9, 0, TAU); g.fill();
+    roughCircle(g, 0, 0, 8.5, INK, 2.1, monster.phase + game.clock * 0.8);
+    g.strokeStyle = INK; g.lineWidth = 1.8; g.lineCap = 'round';
+    g.beginPath(); g.moveTo(-7, -5); g.lineTo(-11, -9); g.moveTo(7, -5); g.lineTo(11, -9);
+    g.moveTo(-8, 4); g.lineTo(-12, 7 + wobble * 2); g.moveTo(8, 4); g.lineTo(12, 7 - wobble * 2); g.stroke();
+    g.fillStyle = INK; g.beginPath(); g.arc(-3, -2, 1.4, 0, TAU); g.arc(3, -2, 1.4, 0, TAU); g.fill();
+    g.beginPath(); g.arc(0, 5, 3.2, Math.PI * 1.12, Math.PI * 1.88); g.stroke();
+  } else {
+    if (monster.windup > 0) {
+      g.strokeStyle = RED; g.lineWidth = 1.5; g.globalAlpha = 0.45 + Math.sin(game.clock * 22) * 0.25;
+      g.beginPath(); g.arc(0, 0, 12 + (0.48 - monster.windup) * 8, 0, TAU); g.stroke();
+      g.globalAlpha = 1; g.fillStyle = RED; g.font = 'bold 13px ' + UI_FONT;
+      g.textAlign = 'center'; g.fillText('!', 0, -14);
+    }
+    g.fillStyle = monster.windup > 0 ? 'rgba(185,68,61,.24)' : 'rgba(89,66,49,.16)';
+    g.strokeStyle = monster.windup > 0 ? RED : INK; g.lineWidth = 1.7;
+    g.beginPath();
+    for (let i = 0; i < 16; i++) {
+      const a = i / 16 * TAU, r = i % 2 ? 5.2 : 8.2;
+      const x = Math.cos(a) * r, y = Math.sin(a) * r;
+      if (i === 0) g.moveTo(x, y); else g.lineTo(x, y);
+    }
+    g.closePath(); g.fill(); g.stroke();
+    g.fillStyle = INK; g.beginPath(); g.arc(-2.4, -1, 1.1, 0, TAU); g.arc(2.4, -1, 1.1, 0, TAU); g.fill();
+  }
+  g.restore();
+}
+
+function drawEffects(g) {
+  for (const p of projectiles) {
+    g.strokeStyle = 'rgba(89,66,49,.28)'; g.lineWidth = 2;
+    g.beginPath(); g.moveTo(p.x - p.vx * 0.045, p.y - p.vy * 0.045); g.lineTo(p.x, p.y); g.stroke();
+    g.fillStyle = INK; g.beginPath(); g.arc(p.x, p.y, p.r, 0, TAU); g.fill();
+  }
+  for (const p of particles) {
+    g.globalAlpha = clamp(p.life / (p.max || 1), 0, 1);
+    g.strokeStyle = p.color; g.fillStyle = p.color;
+    if (p.line) {
+      g.lineWidth = p.size; g.beginPath(); g.moveTo(p.x, p.y); g.lineTo(p.tx, p.ty); g.stroke();
+    } else {
+      g.beginPath(); g.arc(p.x, p.y, p.size, 0, TAU); g.fill();
+    }
+  }
+  g.globalAlpha = 1;
+  for (const f of floaters) {
+    g.globalAlpha = clamp(f.life / 0.35, 0, 1);
+    g.fillStyle = f.color; g.font = 'bold 12px ' + UI_FONT;
+    g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(f.text, f.x, f.y);
+  }
+  g.globalAlpha = 1;
+}
+
+/* ------------------------------ HUD 与按钮 ------------------------------ */
+function formatTime(seconds) {
+  const total = Math.floor(seconds);
+  return String(Math.floor(total / 60)).padStart(2, '0') + ':' + String(total % 60).padStart(2, '0');
+}
+
+function drawCircleButton(g, button, label, active) {
+  g.save();
+  g.globalAlpha = active ? 0.95 : 0.66;
+  g.fillStyle = active ? 'rgba(89,66,49,.18)' : 'rgba(245,235,205,.72)';
+  g.strokeStyle = INK; g.lineWidth = 1.5;
+  g.beginPath(); g.arc(button.x, button.y, button.r, 0, TAU); g.fill(); g.stroke();
+  g.fillStyle = INK; g.font = 'bold ' + (button.r * 0.72) + 'px ' + UI_FONT;
+  g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(label, button.x, button.y + 0.5);
+  g.restore();
+}
+
+function drawTextButton(g, rect, text, primary) {
+  g.save();
+  g.fillStyle = primary ? INK : 'rgba(245,235,205,.72)';
+  g.strokeStyle = INK; g.lineWidth = 1.6;
+  g.beginPath();
+  if (g.roundRect) g.roundRect(rect.x, rect.y, rect.w, rect.h, 9); else g.rect(rect.x, rect.y, rect.w, rect.h);
+  g.fill(); g.stroke();
+  g.fillStyle = primary ? '#f5ebcd' : INK;
+  g.font = 'bold 16px ' + FONT; g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.fillText(text, rect.x + rect.w / 2, rect.y + rect.h / 2 + 1);
+  g.restore();
+}
+
+function drawHUD(g) {
+  g.textAlign = 'left'; g.textBaseline = 'alphabetic';
+  g.fillStyle = 'rgba(89,66,49,.64)'; g.font = '10px ' + UI_FONT;
+  g.fillText('纸上逃生 · 第 ' + String(game.page + 1).padStart(2, '0') + ' / ' + String(PAGE_COUNT).padStart(2, '0') + ' 页', 30, 26);
+  g.fillStyle = INK; g.font = 'bold 27px ' + FONT; g.fillText('五亿迷宫', 29, 57);
+  g.fillStyle = RED; g.font = 'bold 12px ' + FONT;
+  g.fillText(game.page === PAGE_COUNT - 1 ? '最后一页，拿走 5亿元！' : '第 ' + (game.page + 1) + ' / ' + PAGE_COUNT + ' 页 · 寻找出口', 177, 55);
+  drawCircleButton(g, PAUSE_BUTTON, game.state === 'paused' ? '▶' : 'Ⅱ', false);
+  drawCircleButton(g, MUTE_BUTTON, game.muted ? '×' : '♪', false);
+
+  for (let i = 0; i < MAX_HP; i++) drawHeart(g, 40 + i * 24, 93, 8, i < player.hp);
+  drawKey(g, 151, 94, 0.72);
+  g.fillStyle = INK; g.font = 'bold 13px ' + UI_FONT; g.textAlign = 'left'; g.textBaseline = 'middle';
+  g.fillText('× ' + player.keys, 166, 94);
+  drawWeapon(g, 236, 94, player.weaponNames[0] || '剑', 0.66);
+  g.fillText('× ' + player.weapons, 250, 94);
+  g.fillStyle = 'rgba(89,66,49,.64)'; g.font = '11px ' + UI_FONT;
+  g.fillText('用时', 343, 93);
+  g.fillStyle = INK; g.font = 'bold 16px ' + UI_FONT; g.fillText(formatTime(game.elapsed), 382, 94);
+
+  const message = game.messageT > 0 ? game.message : (player.keys ? '钥匙会开锁，支路里还有补给' : '目标：找钥匙开门，从右上角逃走');
+  g.fillStyle = game.messageT > 0 ? RED : 'rgba(89,66,49,.72)';
+  g.font = 'bold 12px ' + FONT; g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.fillText(message, W / 2, 649);
+}
+
+function drawControls(g) {
+  const active = new Set(touchControls.values());
+  g.save(); g.globalAlpha = TOUCH ? 0.90 : 0.58;
+  for (const b of DPAD) {
+    g.fillStyle = active.has(b.action) ? 'rgba(89,66,49,.24)' : 'rgba(245,235,205,.60)';
+    g.strokeStyle = INK; g.lineWidth = 1.6;
+    g.beginPath(); g.arc(b.x, b.y, b.r, 0, TAU); g.fill(); g.stroke();
+    const angle = b.action === 'right' ? 0 : b.action === 'down' ? Math.PI / 2 : b.action === 'left' ? Math.PI : -Math.PI / 2;
+    g.save(); g.translate(b.x, b.y); g.rotate(angle);
+    g.fillStyle = INK; g.beginPath(); g.moveTo(8, 0); g.lineTo(-4, -6); g.lineTo(-4, 6); g.closePath(); g.fill(); g.restore();
+  }
+  g.globalAlpha = 1;
+  g.fillStyle = INK; g.font = 'bold 13px ' + FONT; g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.fillText(TOUCH ? '按住方向移动' : '方向键 / WASD 移动', 245, 690);
+  g.fillStyle = 'rgba(89,66,49,.68)'; g.font = '11px ' + FONT;
+  g.fillText(TOUCH ? '点右侧按钮使用武器' : '空格使用武器 · P 暂停', 245, 712);
+  drawTextButton(g, BOTTOM_RESTART, '重开', false);
+
+  g.globalAlpha = TOUCH ? 0.94 : 0.66;
+  g.fillStyle = 'rgba(185,68,61,.09)'; g.strokeStyle = RED; g.lineWidth = 2;
+  g.beginPath(); g.arc(WEAPON_BUTTON.x, WEAPON_BUTTON.y, WEAPON_BUTTON.r, 0, TAU); g.fill(); g.stroke();
+  drawWeapon(g, WEAPON_BUTTON.x, WEAPON_BUTTON.y - 10, player.weaponNames[0] || '剑', 1.1);
+  g.fillStyle = RED; g.font = 'bold 13px ' + FONT; g.fillText('武器 ×' + player.weapons, WEAPON_BUTTON.x, WEAPON_BUTTON.y + 19);
+  g.restore();
+}
+
+function paperPanel(g, x, y, w, h) {
+  g.save(); g.shadowColor = 'rgba(42,30,20,.28)'; g.shadowBlur = 22; g.shadowOffsetY = 8;
+  g.fillStyle = '#f7edcf';
+  g.beginPath(); g.moveTo(x + 5, y); g.lineTo(x + w - 4, y + 2); g.lineTo(x + w, y + h - 5);
+  g.lineTo(x + 4, y + h); g.lineTo(x, y + 5); g.closePath(); g.fill();
+  g.shadowColor = 'transparent'; roughRect(g, x, y, w, h, INK, 1.7); g.restore();
+}
+
+function drawOverlay(g) {
+  if (game.state === 'playing') return;
+  g.fillStyle = 'rgba(52,42,34,.52)'; g.fillRect(0, 0, W, H);
+  if (game.state === 'title') {
+    paperPanel(g, 44, 150, 392, 438);
+    g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.fillStyle = RED; g.font = 'bold 13px ' + FONT; g.fillText('五 页 迷 宫 · 三 格 血 · 五 亿 元', W / 2, 181);
+    g.fillStyle = INK; g.font = 'bold 45px ' + FONT; g.fillText('五亿迷宫', W / 2, 228);
+    g.font = '17px ' + FONT; g.fillText('纸上逃生 · 共 ' + PAGE_COUNT + ' 页', W / 2, 266);
+    g.fillStyle = 'rgba(89,66,49,.76)'; g.font = '13px ' + FONT;
+    g.fillText('找钥匙开门，穿过 ' + PAGE_COUNT + ' 页迷宫拿走 5亿元。', W / 2, 300);
+
+    drawHeart(g, 91, 338, 8, true, 3);
+    drawKey(g, 90, 379, 0.85, 2);
+    drawWeapon(g, 90, 421, '剑', 0.9);
+    g.textAlign = 'left'; g.fillStyle = INK; g.font = '14px ' + FONT;
+    g.fillText('三格血，数字爱心能回血', 116, 338);
+    g.fillText('数字是钥匙能开锁的次数', 116, 379);
+    g.fillText('武器用一次，打怪有机会掉新武器', 116, 421);
+    g.textAlign = 'center'; g.fillStyle = RED; g.font = 'bold 13px ' + FONT;
+    g.fillText('大怪会追你；小怪靠近后会发射墨滴！', W / 2, 466);
+    drawTextButton(g, START_BUTTON, '开始闯关 →', true);
+    g.fillStyle = 'rgba(89,66,49,.64)'; g.font = '11px ' + FONT;
+    g.fillText('WASD 移动 · 空格武器 · M 音乐 / 静音', W / 2, 576);
+  } else if (game.state === 'paused') {
+    paperPanel(g, 70, 270, 340, 268);
+    g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillStyle = INK;
+    g.font = 'bold 34px ' + FONT; g.fillText('先合上这一页', W / 2, 315);
+    g.fillStyle = 'rgba(89,66,49,.68)'; g.font = '14px ' + FONT;
+    g.fillText('怪物和计时都已暂停', W / 2, 357);
+    drawTextButton(g, RESUME_BUTTON, '继续闯关', true);
+    drawTextButton(g, PAUSE_RESTART_BUTTON, '重开本页', false);
+    g.fillStyle = 'rgba(89,66,49,.60)'; g.font = '11px ' + FONT;
+    g.fillText('P / Esc 继续 · R 重开', W / 2, 519);
+  } else {
+    const won = game.state === 'win', finalPage = game.page === PAGE_COUNT - 1;
+    paperPanel(g, 54, 230, 372, 344);
+    g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.fillStyle = won ? RED : INK; g.font = 'bold ' + (won && finalPage ? 37 : 34) + 'px ' + FONT;
+    const heading = won ? (finalPage ? '5亿元到手！' : '第 ' + (game.page + 1) + ' 页完成！') : '这一页被弄破了';
+    g.fillText(heading, W / 2, 281);
+    g.fillStyle = INK; g.font = '16px ' + FONT;
+    const subtitle = won ? (finalPage ? '五页全部通过，漂亮地逃出来了。' : '下一站：第 ' + (game.page + 2) + ' 页，生命会补满。') : '别灰心，地图没变，再试一次。';
+    g.fillText(subtitle, W / 2, 328);
+    g.font = 'bold 18px ' + UI_FONT;
+    const shownTime = won && finalPage ? game.totalElapsed : (won ? game.winTime : game.elapsed);
+    g.fillText((won && finalPage ? '总用时  ' : '本页用时  ') + formatTime(shownTime), W / 2, 375);
+    g.fillStyle = 'rgba(89,66,49,.72)'; g.font = '14px ' + FONT;
+    g.fillText('本页击败  ' + game.kills + ' 只 · 剩余武器  ' + player.weapons + ' 件', W / 2, 414);
+    const buttonText = won ? (finalPage ? '再闯一次 →' : '进入下一页 →') : '重开本页 →';
+    drawTextButton(g, END_RESTART_BUTTON, buttonText, true);
+    g.fillStyle = 'rgba(89,66,49,.60)'; g.font = '11px ' + FONT;
+    g.fillText(won && !finalPage ? 'Enter / 空格 进入下一页' : 'Enter / 空格 / R 重开', W / 2, 548);
+  }
+}
+
+/* ------------------------------ 渲染与主循环 ------------------------------ */
+function render() {
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.fillStyle = '#342a22'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.setTransform(view.s, 0, 0, view.s, view.ox, view.oy);
+  ctx.drawImage(staticLayer, 0, 0, W, H);
+
+  ctx.save();
+  if (game.shake > 0) ctx.translate(Math.sin(game.clock * 83) * game.shake * 2.2, Math.cos(game.clock * 71) * game.shake * 1.5);
+  drawGoal(ctx);
+  for (const d of doors.values()) drawDoor(ctx, d);
+  for (const item of items) drawItem(ctx, item);
+  for (const monster of monsters) drawMonster(ctx, monster);
+  drawPlayer(ctx);
+  drawEffects(ctx);
+  ctx.restore();
+
+  drawHUD(ctx);
+  if (game.state === 'playing') drawControls(ctx);
+  if (game.redFlash > 0) {
+    const gradient = ctx.createRadialGradient(W / 2, H / 2, 130, W / 2, H / 2, 430);
+    gradient.addColorStop(0, 'rgba(185,68,61,0)');
+    gradient.addColorStop(1, 'rgba(185,68,61,' + (game.redFlash * 0.55) + ')');
+    ctx.fillStyle = gradient; ctx.fillRect(0, 0, W, H);
+  }
+  drawOverlay(ctx);
+}
+
+let last = 0, accumulator = 0;
+function frame(now) {
+  requestAnimationFrame(frame);
+  if (!last) last = now;
+  let dt = Math.min(0.1, Math.max(0, (now - last) / 1000));
+  last = now;
+  game.clock += dt;
+  if (game.state === 'playing') {
+    accumulator += dt;
+    let steps = 0;
+    while (accumulator >= STEP && steps < 6 && game.state === 'playing') {
+      update(STEP); accumulator -= STEP; steps++;
+    }
+    if (steps === 6) accumulator = 0;
+  } else {
+    accumulator = 0;
+    game.stateT += dt;
+    if (game.state === 'win' || game.state === 'over') updateEffects(dt);
+  }
+  updateMusic();
+  render();
+}
+
+/* ------------------------------ 指针与键盘 ------------------------------ */
+function hitCircle(p, b) {
+  return Math.hypot(p.x - b.x, p.y - b.y) <= b.r * 1.18;
+}
+function hitDpad(p) {
+  return DPAD.find(b => hitCircle(p, b)) || null;
+}
+function clearInputs() {
+  keys.clear(); touchControls.clear(); debugDir = null;
+}
+
+canvas.addEventListener('pointerdown', event => {
+  event.preventDefault(); ensureAudio();
+  const p = toWorld(event.clientX, event.clientY);
+  if (hitCircle(p, MUTE_BUTTON)) { toggleMute(); return; }
+  if (game.state === 'title') {
+    if (pointInRect(p, START_BUTTON)) startGame();
+    return;
+  }
+  if (game.state === 'paused') {
+    if (pointInRect(p, RESUME_BUTTON) || hitCircle(p, PAUSE_BUTTON)) togglePause();
+    else if (pointInRect(p, PAUSE_RESTART_BUTTON)) retryPage();
+    return;
+  }
+  if (game.state === 'over' || game.state === 'win') {
+    if (game.stateT > 0.3 && pointInRect(p, END_RESTART_BUTTON)) handleEndAction();
+    return;
+  }
+  if (hitCircle(p, PAUSE_BUTTON)) { togglePause(); return; }
+  if (pointInRect(p, BOTTOM_RESTART)) { retryPage(); return; }
+  if (hitCircle(p, WEAPON_BUTTON)) { useWeapon(); return; }
+  const direction = hitDpad(p);
+  if (direction) {
+    touchControls.set(event.pointerId, direction.action);
+    try { canvas.setPointerCapture(event.pointerId); } catch (_) {}
+  }
+}, { passive: false });
+
+canvas.addEventListener('pointermove', event => {
+  if (!touchControls.has(event.pointerId)) return;
+  const direction = hitDpad(toWorld(event.clientX, event.clientY));
+  if (direction) touchControls.set(event.pointerId, direction.action);
+}, { passive: false });
+
+function releasePointer(event) { touchControls.delete(event.pointerId); }
+canvas.addEventListener('pointerup', releasePointer);
+canvas.addEventListener('pointercancel', releasePointer);
+canvas.addEventListener('contextmenu', event => event.preventDefault());
+
+window.addEventListener('keydown', event => {
+  const code = event.code;
+  if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(code)) event.preventDefault();
+  ensureAudio();
+  if (code === 'KeyM') { toggleMute(); return; }
+  if (game.state === 'title') {
+    if (['Enter', 'Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'KeyW', 'KeyA', 'KeyS', 'KeyD'].includes(code)) {
+      startGame();
+      if (code !== 'Enter' && code !== 'Space') keys.add(code);
+    }
+    return;
+  }
+  if (game.state === 'over' || game.state === 'win') {
+    if (game.stateT > 0.3 && ['Enter', 'Space', 'KeyR'].includes(code)) handleEndAction();
+    return;
+  }
+  if (code === 'KeyR') { retryPage(); return; }
+  if (code === 'KeyP' || code === 'Escape') { togglePause(); return; }
+  if (game.state === 'paused') {
+    if (code === 'Enter') togglePause();
+    return;
+  }
+  if (code === 'Space') { if (!event.repeat) useWeapon(); return; }
+  keys.add(code);
+}, { passive: false });
+window.addEventListener('keyup', event => keys.delete(event.code));
+window.addEventListener('blur', () => {
+  clearInputs();
+  if (game.state === 'playing') setState('paused');
+});
+document.addEventListener('visibilitychange', () => {
+  last = 0;
+  if (document.hidden) {
+    clearInputs();
+    if (game.state === 'playing') setState('paused');
+  }
+});
+window.addEventListener('resize', resize);
+window.addEventListener('orientationchange', () => setTimeout(resize, 100));
+
+/* ------------------------------ 测试状态接口 ------------------------------ */
+window.__maze = {
+  start: startGame,
+  step(seconds) {
+    const count = Math.max(1, Math.ceil(seconds / STEP));
+    for (let i = 0; i < count; i++) {
+      if (game.state === 'playing') update(STEP);
+      else { game.stateT += STEP; updateEffects(STEP); }
+    }
+    render();
+  },
+  teleport(x, y) {
+    const p = cellCenter({ x: clamp(Math.round(x), 0, COLS - 1), y: clamp(Math.round(y), 0, ROWS - 1) });
+    player.x = p.x; player.y = p.y; player.invuln = 0;
+  },
+  move(x, y) { debugDir = (x || y) ? { x, y } : null; },
+  route() { return level.path.map(c => ({ x: c.x, y: c.y })); },
+  nextPage,
+  retryPage,
+  useWeapon,
+  hurt() { player.invuln = 0; return hurtPlayer('测试伤害'); },
+  setHealth(value) { player.hp = clamp(Math.round(value), 0, MAX_HP); player.invuln = 0; },
+  snapshot() {
+    return {
+      state: game.state, elapsed: game.elapsed, totalElapsed: game.totalElapsed,
+      page: game.page + 1, pageCount: PAGE_COUNT, kills: game.kills,
+      audio: { context: AC ? AC.state : 'uninitialized', muted: game.muted, musicStep: music.step, musicNextTime: music.nextTime },
+      hp: player.hp, keys: player.keys, weapons: player.weapons,
+      player: { x: player.x, y: player.y, cell: cellAt(player.x, player.y), invuln: player.invuln },
+      start: START, goal: GOAL, validation: level.report,
+      doors: Array.from(doors.values()).map(d => ({ a: d.a, b: d.b, wall: d.wall, open: d.open, x: d.x, y: d.y })),
+      items: items.map(i => ({ kind: i.kind, value: i.value, variant: i.variant, cell: i.cell, taken: i.taken, dropped: !!i.dropped })),
+      monsters: monsters.map(m => ({ kind: m.kind, alive: m.alive, x: m.x, y: m.y, cell: cellAt(m.x, m.y), windup: m.windup })),
+      projectiles: projectiles.length
+    };
+  },
+  render
+};
+
+/* ------------------------------ 启动 ------------------------------ */
+buildLevel(0);
+resetRun();
+buildStaticLayer();
+resize();
+requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
