@@ -36,6 +36,11 @@
   --art-devour-fish-2: oklch(90% 0.06 90);
   --art-devour-fish-3: oklch(78% 0.12 18);
 
+  --art-maze-paper: oklch(96% 0.035 90);
+  --art-maze-grid: oklch(80% 0.035 225 / 0.42);
+  --art-maze-ink: oklch(26% 0.025 55);
+  --art-maze-heart: oklch(58% 0.19 25);
+
   --font-display: "Geist", ui-sans-serif, system-ui, sans-serif;
   --font-body: "Geist", ui-sans-serif, system-ui, sans-serif;
   --font-serif: "Newsreader", ui-serif, Georgia, serif;
