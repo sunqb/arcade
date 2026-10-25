@@ -22,7 +22,7 @@
 </style>
 </head>
 <body>
-<canvas id="game" role="img" aria-label="五亿迷宫：五页手绘迷宫，三格血，寻找数字钥匙开门，用一次性武器打败怪物并随机拾取掉落武器，最终取得五亿元。"></canvas>
+<canvas id="game" tabindex="0" role="img" aria-label="五亿迷宫：五页手绘迷宫，三格血，寻找数字钥匙开门，用一次性武器打败怪物并随机拾取掉落武器，最终取得五亿元。"></canvas>
 <p class="sr-only">方向键或 WASD 移动，空格使用武器，P 暂停，R 重开本页，M 切换音乐与音效。触屏可使用方向和武器按钮。</p>
 <noscript>需要启用 JavaScript 才能进入五亿迷宫。</noscript>
 <script>
@@ -95,6 +95,10 @@ function toWorld(clientX, clientY) {
     x: ((clientX - r.left) * view.dpr - view.ox) / view.s,
     y: ((clientY - r.top) * view.dpr - view.oy) / view.s
   };
+}
+
+function focusCanvas() {
+  canvas.focus();
 }
 
 /* ------------------------------ 迷宫生成与寻路 ------------------------------ */
@@ -369,6 +373,7 @@ function setState(state) {
 }
 
 function startGame() {
+  focusCanvas();
   ensureAudio();
   game.page = 0;
   game.totalElapsed = 0;
@@ -381,6 +386,7 @@ function startGame() {
 }
 
 function retryPage() {
+  focusCanvas();
   ensureAudio();
   resetRun();
   setState('playing');
@@ -390,6 +396,7 @@ function retryPage() {
 
 function nextPage() {
   if (game.page >= PAGE_COUNT - 1) { startGame(); return; }
+  focusCanvas();
   ensureAudio();
   game.page++;
   buildLevel(game.page);
@@ -1370,7 +1377,7 @@ function clearInputs() {
 }
 
 canvas.addEventListener('pointerdown', event => {
-  event.preventDefault(); ensureAudio();
+  event.preventDefault(); focusCanvas(); ensureAudio();
   const p = toWorld(event.clientX, event.clientY);
   if (hitCircle(p, MUTE_BUTTON)) { toggleMute(); return; }
   if (game.state === 'title') {

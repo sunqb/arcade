@@ -640,7 +640,7 @@ body.is-playing { overflow: hidden; }
       <button type="button" class="stage__back" id="stageBack">返回大厅</button>
       <p class="stage__title" id="stageTitle">游戏</p>
     </div>
-    <iframe id="stageFrame" title="游戏画面" allow="fullscreen"></iframe>
+    <iframe id="stageFrame" title="游戏画面" allow="fullscreen" tabindex="0"></iframe>
   </div>
 
   <script>
@@ -651,19 +651,32 @@ body.is-playing { overflow: hidden; }
     var back = document.getElementById('stageBack');
     var links = document.querySelectorAll('[data-play]');
 
+    function focusPlayer() {
+      frame.focus();
+      try {
+        frame.contentWindow.focus();
+        var gameCanvas = frame.contentDocument.querySelector('canvas');
+        if (gameCanvas) {
+          gameCanvas.tabIndex = 0;
+          gameCanvas.focus();
+        }
+      } catch (_) {}
+    }
+
     function openPlay(href, name) {
       title.textContent = name;
+      frame.onload = focusPlayer;
       frame.src = href;
       stage.hidden = false;
       stage.classList.add('is-open');
       document.body.classList.add('is-playing');
-      back.focus();
     }
 
     function closePlay() {
       stage.classList.remove('is-open');
       stage.hidden = true;
       document.body.classList.remove('is-playing');
+      frame.onload = null;
       frame.src = 'about:blank';
     }
 
